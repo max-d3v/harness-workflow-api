@@ -16,6 +16,8 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.110",
-    "express": "^5.2.1"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^5.2.1",
+    "tree-kill": "^1.2.2"
   }
 }

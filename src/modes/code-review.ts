@@ -7,7 +7,7 @@ interface CodeReviewInput {
   focus?: string;
 }
 
-const READ_ONLY_TOOLS = ["Read", "Glob", "Grep"];
+const READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "ComputerUse"];
 
 const SYSTEM_PROMPT = `You are a senior code reviewer. You have READ-ONLY access — do not attempt to edit any files.
 

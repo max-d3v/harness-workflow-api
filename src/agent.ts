@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import { createWorktree, commitAndPush, openPR } from "./git.js";
 import { homedir } from "os";
 import path from "path";
@@ -16,6 +17,8 @@ export interface AgentOptions {
   originBranch: string;
   systemPrompt?: string;
   tools?: string[] | { type: "preset"; preset: "claude_code" };
+  mcpServers?: Record<string, McpServerConfig>;
+  allowedTools?: string[];
   model?: string;
   effort?: "low" | "medium" | "high" | "max";
   maxTurns?: number;
@@ -24,6 +27,8 @@ export interface AgentOptions {
   skipPR?: boolean;
   loadProjectSettings?: boolean;
 }
+
+
 
 export interface AgentResult {
   result: string;
@@ -50,6 +55,8 @@ function buildSdkOptions(opts: AgentOptions, cwd: string) {
     maxTurns: opts.maxTurns ?? DEFAULTS.maxTurns,
     cwd,
     ...(opts.systemPrompt && { systemPrompt: opts.systemPrompt }),
+    ...(opts.mcpServers && { mcpServers: opts.mcpServers }),
+    ...(opts.allowedTools && { allowedTools: opts.allowedTools }),
     ...(opts.loadProjectSettings && { settingSources: ["project" as const] }),
     ...(opts.extendedContext && {
       betas: ["context-1m-2025-08-07" as const] satisfies string[],
@@ -63,21 +70,30 @@ function extractSessionId(message: any): string | undefined {
   }
 }
 
+async function collectQuery(
+  prompt: string,
+  options: ReturnType<typeof buildSdkOptions>,
+): Promise<{ result: string; sessionId?: string }> {
+  let result = "";
+  let sessionId: string | undefined;
+
+  for await (const msg of query({ prompt, options })) {
+    sessionId ??= extractSessionId(msg);
+    if ("result" in msg) result = (msg as any).result;
+  }
+
+  return { result, sessionId };
+}
+
 export async function queryAgent(opts: AgentOptions): Promise<AgentResult> {
   const project = resolvePath(opts.project);
   const ctx = await createWorktree(project, opts.originBranch);
 
   try {
-    let result = "";
-    let sessionId: string | undefined;
-
-    for await (const msg of query({
-      prompt: opts.prompt,
-      options: buildSdkOptions(opts, ctx.worktreePath),
-    })) {
-      sessionId ??= extractSessionId(msg);
-      if ("result" in msg) result = (msg as any).result;
-    }
+    const { result, sessionId } = await collectQuery(
+      opts.prompt,
+      buildSdkOptions(opts, ctx.worktreePath),
+    );
 
     let prUrl: string | undefined;
 
@@ -97,23 +113,37 @@ export async function queryAgent(opts: AgentOptions): Promise<AgentResult> {
   }
 }
 
-export async function queryAgentReadOnly(
-  opts: Omit<AgentOptions, "originBranch"> & { originBranch?: string },
+type NoPRAgentOptions = Omit<AgentOptions, "originBranch"> & {
+  originBranch?: string;
+};
+
+async function runNoPRAgent(
+  opts: NoPRAgentOptions,
+  cwd?: string,
 ): Promise<Omit<AgentResult, "prUrl" | "branch">> {
-  let result = "";
-  let sessionId: string | undefined;
-
-  const project = resolvePath(opts.project);
-  for await (const msg of query({
-    prompt: opts.prompt,
-    options: buildSdkOptions(
+  return collectQuery(
+    opts.prompt,
+    buildSdkOptions(
       { ...opts, originBranch: opts.originBranch ?? "main" } as AgentOptions,
-      project,
+      cwd ?? resolvePath(opts.project),
     ),
-  })) {
-    sessionId ??= extractSessionId(msg);
-    if ("result" in msg) result = (msg as any).result;
-  }
+  );
+}
 
-  return { result, sessionId };
+export async function queryAgentReadOnly(
+  opts: NoPRAgentOptions,
+): Promise<Omit<AgentResult, "prUrl" | "branch">> {
+  return runNoPRAgent(opts);
+}
+
+/**
+ * Non-PR agent that runs directly in `cwd` (defaults to the resolved project).
+ * No worktree, no commit/push/PR. Use for side-effecting Bash tasks such as
+ * starting or killing a dev server. The caller controls which tools are
+ * granted via `opts.tools`.
+ */
+export async function queryAgentTask(
+  opts: NoPRAgentOptions & { cwd?: string },
+): Promise<Omit<AgentResult, "prUrl" | "branch">> {
+  return runNoPRAgent(opts, opts.cwd ?? resolvePath(opts.project));
 }
