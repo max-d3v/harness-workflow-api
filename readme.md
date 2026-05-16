@@ -1,6 +1,5 @@
 # Claude Harness API 🦹
 
-Imma rawdog this README, AI text is soulless 🤖 (used chatgpt to format the .md)
 
 Use your Claude subscription plan through an HTTP wrapper to make autonomous coding agents for 1/5 of the price.
 
@@ -83,7 +82,7 @@ Like I already said, this makes autonomous coding agents way cheaper for 2 reaso
 
 This also makes code reviewers better for one reason:
 
-I know people say Claude Code is not the best harness, but it’s still made by the creators of the model, so even with high token spendage, I deem it a good harness. IDGAF.
+I know people say Claude Code is not the best harness, but it’s still made by the creators of the model, so even with high token spendage, I deem it a good harness.
 
 SaaS code reviewers (like code rabbit, greptile etc.) use their own harnesses (unreliable), worst models (You can use opus here which i deem the best model for coding) and super expensive monthly plans (obviously, they have to pay usage-based tokens for their model inference). Their only advantage is maybe that they have better code review prompts, which are a small part of the results.
 
