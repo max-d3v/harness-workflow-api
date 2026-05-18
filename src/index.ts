@@ -27,10 +27,20 @@ app.post("/prompt", async (req: Request, res: Response) => {
     return;
   }
 
+  const ac = new AbortController();
+  res.on("close", () => {
+    if (!res.writableFinished) ac.abort();
+  });
+
   try {
-    const result = await queryAgent(body);
+    const result = await queryAgent({ ...body, abortController: ac });
     res.json(result);
   } catch (err: any) {
+    if (ac.signal.aborted) {
+      console.log("[POST /prompt] Request cancelled");
+      if (!res.headersSent) res.status(499).json({ error: "Request cancelled" });
+      return;
+    }
     console.error("[POST /prompt]", err);
     res.status(500).json({ error: err.message ?? "Internal server error" });
   }
@@ -43,11 +53,21 @@ app.post("/mode/:name", async (req: Request, res: Response) => {
     return;
   }
 
+  const ac = new AbortController();
+  res.on("close", () => {
+    if (!res.writableFinished) ac.abort();
+  });
+
   try {
-    const result = await fn(req.body);
+    const result = await fn(req.body, ac.signal);
     res.json(result);
   } catch (err: any) {
-    console.error(`[POST /fn/${req.params.name}]`, err);
+    if (ac.signal.aborted) {
+      console.log(`[POST /mode/${req.params.name}] Request cancelled`);
+      if (!res.headersSent) res.status(499).json({ error: "Request cancelled" });
+      return;
+    }
+    console.error(`[POST /mode/${req.params.name}]`, err);
     res.status(500).json({ error: err.message ?? "Internal server error" });
   }
 });

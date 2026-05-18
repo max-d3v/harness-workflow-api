@@ -4,6 +4,7 @@ import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import { promisify } from "node:util";
 import treeKill from "tree-kill";
 import { $ } from "bun";
+import { imageServer } from "../tools/screenshot-upload.js";
 
 
 interface CodeTestInput {
@@ -14,28 +15,36 @@ interface CodeTestInput {
   pr: string | number;
   url?: string;
   focus?: string;
+  loginInstructions?: string;
 }
 
 const TESTER_TOOLS = ["Read", "Glob", "Grep"];
 const SERVER_AGENT_TOOLS = ["Bash", "Read", "Glob", "Grep"];
 
-const PLAYWRIGHT_MCP: Record<string, McpServerConfig> = {
+const MCP_SERVERS: Record<string, McpServerConfig> = {
   playwright: {
     command: "npx",
     args: ["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
   },
+  imageUploader: imageServer
 };
-const PLAYWRIGHT_ALLOWED = ["mcp__playwright"];
+const MCP_TOOLS_ALLOWED = ["mcp__playwright", "mcp__imageUploader"];
 
-const SERVER_INITIATOR_SYSTEM_PROMPT = `You start a project's dev server so another agent can drive it in a browser.
+const SERVER_INITIATOR_SYSTEM_PROMPT = `
+You start a project's dev server so another agent can drive it in a browser.
+You will receive the diff stat (list of changed files) from the PR under test.
+Use it to detect which apps or services are needed to run to test the affected changes.
+Be aware for apps that need multiple things to run, like a db + app. so always check root commands first.
+
 
 Steps:
-1. Detect the package manager (bun.lockb→bun, pnpm-lock.yaml→pnpm, yarn.lock→yarn, else npm) and install dependencies.
-2. Find the dev script (package.json "dev", else "start").
-3. Start it DETACHED so it survives after you exit:
+1. Read the diff stat to determine which part of the project changed.
+2. Detect the package manager (bun.lockb→bun, pnpm-lock.yaml→pnpm, yarn.lock→yarn, else npm) and install dependencies.
+3. Find the right dev script, IF THERE IS A ROOT DEV COMMAND PRIORIZE IT.
+4. Start everything DETACHED so it survives after you exit:
    nohup <pkgmgr> run dev > /tmp/devserver.log 2>&1 & echo $!
    then run \`disown\`.
-4. Poll /tmp/devserver.log until the server prints a local URL and is reachable (curl -sf). Give up after ~90s.
+5. Poll /tmp/devserver.log until the server prints a local URL and is reachable (curl -sf). Give up after ~30s.
 
 Output ONLY a final fenced json block, nothing after it:
 \`\`\`json
@@ -43,7 +52,9 @@ Output ONLY a final fenced json block, nothing after it:
 \`\`\`
 "pids" = every PID in the server's process tree you can identify. If the server will not come up, set "url" to null and explain briefly before the json block.`;
 
-const TESTER_SYSTEM_PROMPT = `You are a senior QA analyst doing end-to-end testing of a running web application.
+
+const TESTER_SYSTEM_PROMPT = `
+You are a senior QA analyst doing end-to-end testing of a running web application.
 
 You will receive a git diff from a pull request and a base URL where the app is running.
 Use the Playwright browser tools to exercise the app:
@@ -51,15 +62,39 @@ Use the Playwright browser tools to exercise the app:
 - Test areas the diff could plausibly affect (regressions).
 - Probe edge cases that could slip through (empty/invalid input, auth boundaries, navigation, error states).
 
-For each problem you find:
-- Take a screenshot at the point of failure and reference it.
-- Give exact, numbered steps to reproduce.
-- State expected vs. actual behavior.
-- Suggest a likely cause or fix.
+## Report as you go — do NOT write a final summary
+
+Work through the app one functional area at a time. The moment you finish
+exercising a section — whether it works correctly OR you found a problem —
+report it immediately as its own PR comment, then move on. Do not batch
+findings. Do not save anything for the end.
+
+For EVERY section you exercise, in this exact order:
+1. Take a screenshot of the relevant state (the working result, or the point
+   of failure).
+2. Upload that screenshot with your screenshot upload tool to get the
+   github markdown image string.
+3. Post a PR comment for that section using your PR comment tool, embedding
+   the uploaded image markdown in the body.
+
+Comment body for a WORKING section:
+- ✅ What you tested and the steps you took.
+- Confirmation it behaved as expected.
+- The uploaded screenshot.
+
+Comment body for a BROKEN section:
+- ❌ Short title of the problem.
+- Exact, numbered steps to reproduce.
+- Expected vs. actual behavior.
+- A likely cause or fix.
+- The uploaded screenshot at the point of failure.
+
+Keep each comment scoped to a single section so it stays readable on the PR.
+Skip praise and filler — every comment should carry a screenshot and a
+concrete result.
 
 You have READ-ONLY repo access (Read/Glob/Grep) for context only — do not attempt to edit code.
-Format the result as a structured markdown comment suitable for posting on the PR.
-Lead with the most impactful findings, skip praise. If you found no issues, say so briefly and list what you exercised.`;
+Your final text response is not posted anywhere; it is only an internal log of which sections you covered.`;
 
 interface DevServer {
   url: string;
@@ -73,18 +108,26 @@ function parseJsonBlock(text: string): any {
   return JSON.parse(candidate.trim());
 }
 
-async function startDevServer(project: string): Promise<DevServer> {
+async function startDevServer(project: string, diffStat: string): Promise<DevServer> {
   const { result } = await queryAgentTask({
-    prompt: `Start the dev server for the project in this directory: ${project}`,
+    prompt: `Start the dev server for the project in this directory: ${project}
+
+## Changed files (diff stat)
+\`\`\`
+${diffStat}
+\`\`\``,
     project,
     cwd: project,
     systemPrompt: SERVER_INITIATOR_SYSTEM_PROMPT,
     tools: SERVER_AGENT_TOOLS,
-    model: "claude-sonnet-4-6",
+    model: "claude-opus-4-6",
     effort: "high",
     maxTurns: 30,
     loadProjectSettings: true,
+    logLabel: "codeTest:dev-server",
   });
+
+  console.log(`[codeTest] dev-server agent result:\n${result}`);
 
   let parsed: { url: string | null; pids?: number[]; port?: number };
   try {
@@ -154,14 +197,18 @@ export async function codeTest(input: CodeTestInput) {
   if (input.url) {
     testUrl = input.url;
   } else {
-    server = await startDevServer(project);
+    server = await startDevServer(project, stat);
     testUrl = server.url;
   }
 
   try {
+    const {loginInstructions} = input
+    const loginInstructionsPrompt = `If you need to login into the app, use the following instructions: ${loginInstructions}`
     const focus = input.focus ? `\nFocus area: ${input.focus}` : "";
     const prompt = `Test PR #${prInfo.number}: "${prInfo.title}" (${prInfo.headBranch} → ${prInfo.baseBranch}).
 The app is running at: ${testUrl}${focus}
+${loginInstructions ? loginInstructionsPrompt : ""}
+
 
 ## Diff stat
 \`\`\`
@@ -171,25 +218,39 @@ ${stat}
 ## Full diff
 \`\`\`diff
 ${diff}
-\`\`\``;
+\`\`\`
 
+`; 
     const { result, sessionId } = await queryAgentReadOnly({
       prompt,
       project,
       systemPrompt: TESTER_SYSTEM_PROMPT,
       tools: TESTER_TOOLS,
-      mcpServers: PLAYWRIGHT_MCP,
-      allowedTools: PLAYWRIGHT_ALLOWED,
+      mcpServers: MCP_SERVERS,
+      allowedTools: MCP_TOOLS_ALLOWED,
       model: "claude-sonnet-4-6",
       effort: "high",
-      maxTurns: 40,
+      maxTurns: 110,
       loadProjectSettings: true,
+      logLabel: "codeTest:tester",
     });
 
-    await commentOnPR(project, input.pr, result);
+    console.log(`[codeTest] tester agent result:\n${result}`);
 
     return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number };
+  } catch (err) {
+    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    console.error(`[codeTest] tester agent threw:\n${message}`);
+    await commentOnPR(
+      project,
+      input.pr,
+      `⚠️ **Automated testing failed to complete.**\n\nThe tester agent threw before it could finish exercising this PR, so the findings above (if any) may be incomplete.\n\n\`\`\`\n${message}\n\`\`\``,
+    ).catch((commentErr) =>
+      console.error(`[codeTest] failed to post error comment:`, commentErr),
+    );
+    throw err;
   } finally {
+    console.log("KILLING DEV SERVER", server)
     if (server) await killDevServer(server);
   }
 }

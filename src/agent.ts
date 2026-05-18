@@ -26,6 +26,10 @@ export interface AgentOptions {
   prTitle?: string;
   skipPR?: boolean;
   loadProjectSettings?: boolean;
+  /** When set, every streamed message ("round") is logged with this prefix. */
+  logLabel?: string;
+  /** When provided, aborting this controller cancels the running query. */
+  abortController?: AbortController;
 }
 
 
@@ -61,6 +65,7 @@ function buildSdkOptions(opts: AgentOptions, cwd: string) {
     ...(opts.extendedContext && {
       betas: ["context-1m-2025-08-07" as const] satisfies string[],
     }),
+    ...(opts.abortController && { abortController: opts.abortController }),
   };
 }
 
@@ -70,15 +75,63 @@ function extractSessionId(message: any): string | undefined {
   }
 }
 
+function clip(s: string, n = 1500): string {
+  s = s.replace(/\s+/g, " ").trim();
+  return s.length > n ? `${s.slice(0, n)}…(+${s.length - n} chars)` : s;
+}
+
+function summarizeMessage(msg: any): string | undefined {
+  switch (msg?.type) {
+    case "system":
+      return `system/${msg.subtype ?? "?"}`;
+    case "assistant": {
+      const parts: string[] = [];
+      for (const b of msg.message?.content ?? []) {
+        if (b.type === "text" && b.text?.trim()) parts.push(`text: ${clip(b.text)}`);
+        else if (b.type === "thinking" && b.thinking?.trim())
+          parts.push(`thinking: ${clip(b.thinking, 500)}`);
+        else if (b.type === "tool_use")
+          parts.push(`tool_use ${b.name}(${clip(JSON.stringify(b.input ?? {}), 500)})`);
+      }
+      return `assistant → ${parts.join(" | ") || "(empty)"}`;
+    }
+    case "user": {
+      const parts: string[] = [];
+      for (const b of msg.message?.content ?? []) {
+        if (b.type !== "tool_result") continue;
+        const c = b.content;
+        const text =
+          typeof c === "string"
+            ? c
+            : Array.isArray(c)
+              ? c
+                  .map((x: any) => (x?.type === "image" ? "[image omitted]" : x?.text ?? ""))
+                  .join(" ")
+              : "";
+        parts.push(`tool_result${b.is_error ? "(error)" : ""}: ${clip(text)}`);
+      }
+      return parts.length ? `user ← ${parts.join(" | ")}` : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
 async function collectQuery(
   prompt: string,
   options: ReturnType<typeof buildSdkOptions>,
+  logLabel?: string,
 ): Promise<{ result: string; sessionId?: string }> {
   let result = "";
   let sessionId: string | undefined;
+  let round = 0;
 
   for await (const msg of query({ prompt, options })) {
     sessionId ??= extractSessionId(msg);
+    if (logLabel) {
+      const summary = summarizeMessage(msg);
+      if (summary) console.log(`[${logLabel}] round ${++round}: ${summary}`);
+    }
     if ("result" in msg) result = (msg as any).result;
   }
 
@@ -93,6 +146,7 @@ export async function queryAgent(opts: AgentOptions): Promise<AgentResult> {
     const { result, sessionId } = await collectQuery(
       opts.prompt,
       buildSdkOptions(opts, ctx.worktreePath),
+      opts.logLabel,
     );
 
     let prUrl: string | undefined;
@@ -127,6 +181,7 @@ async function runNoPRAgent(
       { ...opts, originBranch: opts.originBranch ?? "main" } as AgentOptions,
       cwd ?? resolvePath(opts.project),
     ),
+    opts.logLabel,
   );
 }
 

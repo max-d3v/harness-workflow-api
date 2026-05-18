@@ -28,7 +28,7 @@ Format your review as a structured markdown comment suitable for posting on the 
 Keep it concise — skip praise, lead with the most impactful findings.
 If the diff is clean, say so briefly.`;
 
-export async function codeReview(input: CodeReviewInput) {
+export async function codeReview(input: CodeReviewInput, _signal?: AbortSignal) {
   if (!input.project) throw new Error("Missing required field: project");
   if (!input.pr) throw new Error("Missing required field: pr");
 
