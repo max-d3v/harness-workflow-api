@@ -78,17 +78,26 @@ export interface PRInfo {
   baseBranch: string;
   headBranch: string;
   url: string;
+  owner: string;
+  repo: string;
 }
 
 export async function getPRInfo(project: string, pr: string | number): Promise<PRInfo> {
   const json = await $`gh pr view ${pr} --json number,title,baseRefName,headRefName,url`.cwd(project).text();
   const data = JSON.parse(json);
+  // gh returns the canonical PR URL: https://<host>/<owner>/<repo>/pull/<n>
+  const [owner, repo] = new URL(data.url).pathname.split("/").filter(Boolean);
+  if (!owner || !repo) {
+    throw new Error(`Could not parse owner/repo from PR url: ${data.url}`);
+  }
   return {
     number: data.number,
     title: data.title,
     baseBranch: data.baseRefName,
     headBranch: data.headRefName,
     url: data.url,
+    owner,
+    repo,
   };
 }
 

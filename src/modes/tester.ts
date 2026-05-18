@@ -6,6 +6,14 @@ import treeKill from "tree-kill";
 import { $ } from "bun";
 import { imageServer } from "../tools/screenshot-upload.js";
 
+const githubEnv = process.env.MAX_DEV_GITHUB_TOKEN
+if (!githubEnv) throw Error("No github token provided.")
+
+  /*
+  [codeTest:tester] round 84: assistant → tool_use mcp__github__add_issue_comment({"owner":"max-d3v","repo":"cracked-kit-monorepo-boilerplate","issue_number":3,"body":"✅ **Task creation defaults to \"To Do\" status after preferences removal**\n\nSteps taken:\n1. Navigated to `/dashboard/tasks`.\n2. Clicked \"New Task\".\n3. Entered title \"QA test - post-pref-removal default status\" and clicked \"Create Task\".\n4. Verified the newly created task appears in the list with \"To Do\" badge.\n\nThe `createTask` use-case now hardcodes `status: \"todo\"` instead of reading `defaul…(+290 chars))
+[codeTest:tester] round 85: user ← tool_result(error): MCP error -32603: Permission Denied: Resource not accessible by personal access token
+
+  */
 
 interface CodeTestInput {
   // Repo path (worktree or local checkout). Required: the PR diff/comment
@@ -26,9 +34,16 @@ const MCP_SERVERS: Record<string, McpServerConfig> = {
     command: "npx",
     args: ["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
   },
-  imageUploader: imageServer
+  imageUploader: imageServer,
+  github: {
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-github"],
+    env: {
+      GITHUB_PERSONAL_ACCESS_TOKEN: githubEnv
+    }
+  }
 };
-const MCP_TOOLS_ALLOWED = ["mcp__playwright", "mcp__imageUploader"];
+const MCP_TOOLS_ALLOWED = ["mcp__playwright", "mcp__imageUploader", "mcp__github__add_issue_comment"];
 
 const SERVER_INITIATOR_SYSTEM_PROMPT = `
 You start a project's dev server so another agent can drive it in a browser.
@@ -74,7 +89,7 @@ For EVERY section you exercise, in this exact order:
    of failure).
 2. Upload that screenshot with your screenshot upload tool to get the
    github markdown image string.
-3. Post a PR comment for that section using your PR comment tool, embedding
+3. add a issue comment in the given PR. for that section using your add issue comment tool, embedding
    the uploaded image markdown in the body.
 
 Comment body for a WORKING section:
@@ -164,16 +179,16 @@ async function killDevServer(server: DevServer): Promise<void> {
   if (server.port) {
     try {
       for (const pid of await pidsOnPort(server.port)) targets.add(pid);
-    } catch {}
+    } catch { }
   }
   if (targets.size === 0) {
     console.error("[codeTest] No PID or port to stop the dev server with");
     return;
   }
 
-  for (const pid of targets) await killTree(pid, "SIGTERM").catch(() => {});
+  for (const pid of targets) await killTree(pid, "SIGTERM").catch(() => { });
   await new Promise((r) => setTimeout(r, 3000));
-  for (const pid of targets) await killTree(pid, "SIGKILL").catch(() => {});
+  for (const pid of targets) await killTree(pid, "SIGKILL").catch(() => { });
 }
 
 export async function codeTest(input: CodeTestInput) {
@@ -202,10 +217,11 @@ export async function codeTest(input: CodeTestInput) {
   }
 
   try {
-    const {loginInstructions} = input
+    const { loginInstructions } = input
     const loginInstructionsPrompt = `If you need to login into the app, use the following instructions: ${loginInstructions}`
     const focus = input.focus ? `\nFocus area: ${input.focus}` : "";
-    const prompt = `Test PR #${prInfo.number}: "${prInfo.title}" (${prInfo.headBranch} → ${prInfo.baseBranch}).
+    const prompt = `Repository: ${prInfo.owner}/${prInfo.repo}
+PR #${prInfo.number}: "${prInfo.title}" (${prInfo.headBranch} → ${prInfo.baseBranch}).
 The app is running at: ${testUrl}${focus}
 ${loginInstructions ? loginInstructionsPrompt : ""}
 
@@ -220,7 +236,7 @@ ${stat}
 ${diff}
 \`\`\`
 
-`; 
+`;
     const { result, sessionId } = await queryAgentReadOnly({
       prompt,
       project,
