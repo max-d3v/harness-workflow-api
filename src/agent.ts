@@ -34,11 +34,23 @@ export interface AgentOptions {
 
 
 
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+}
+
 export interface AgentResult {
   result: string;
   sessionId?: string;
   prUrl?: string;
   branch?: string;
+  /** input + output + cache creation + cache read tokens for the run. */
+  totalTokens?: number;
+  usage?: TokenUsage;
+  /** Cumulative USD cost reported by the SDK for the run. */
+  totalCostUsd?: number;
 }
 
 const DEFAULTS = {
@@ -121,9 +133,18 @@ async function collectQuery(
   prompt: string,
   options: ReturnType<typeof buildSdkOptions>,
   logLabel?: string,
-): Promise<{ result: string; sessionId?: string }> {
+): Promise<{
+  result: string;
+  sessionId?: string;
+  totalTokens?: number;
+  usage?: TokenUsage;
+  totalCostUsd?: number;
+}> {
   let result = "";
   let sessionId: string | undefined;
+  let usage: TokenUsage | undefined;
+  let totalTokens: number | undefined;
+  let totalCostUsd: number | undefined;
   let round = 0;
 
   for await (const msg of query({ prompt, options })) {
@@ -132,10 +153,28 @@ async function collectQuery(
       const summary = summarizeMessage(msg);
       if (summary) console.log(`[${logLabel}] round ${++round}: ${summary}`);
     }
+    // The final "result" message (success or error) carries cumulative usage.
+    if ((msg as any).type === "result" && (msg as any).usage) {
+      const u = (msg as any).usage;
+      usage = {
+        input_tokens: u.input_tokens ?? 0,
+        output_tokens: u.output_tokens ?? 0,
+        cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
+        cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
+      };
+      totalTokens =
+        usage.input_tokens +
+        usage.output_tokens +
+        usage.cache_creation_input_tokens +
+        usage.cache_read_input_tokens;
+    }
+    if ((msg as any).type === "result" && typeof (msg as any).total_cost_usd === "number") {
+      totalCostUsd = (msg as any).total_cost_usd;
+    }
     if ("result" in msg) result = (msg as any).result;
   }
 
-  return { result, sessionId };
+  return { result, sessionId, totalTokens, usage, totalCostUsd };
 }
 
 export async function queryAgent(opts: AgentOptions): Promise<AgentResult> {
@@ -143,7 +182,7 @@ export async function queryAgent(opts: AgentOptions): Promise<AgentResult> {
   const ctx = await createWorktree(project, opts.originBranch);
 
   try {
-    const { result, sessionId } = await collectQuery(
+    const { result, sessionId, totalTokens, usage, totalCostUsd } = await collectQuery(
       opts.prompt,
       buildSdkOptions(opts, ctx.worktreePath),
       opts.logLabel,
@@ -161,7 +200,7 @@ export async function queryAgent(opts: AgentOptions): Promise<AgentResult> {
       }
     }
 
-    return { result, sessionId, prUrl, branch: ctx.branch };
+    return { result, sessionId, prUrl, branch: ctx.branch, totalTokens, usage, totalCostUsd };
   } finally {
     await ctx.cleanup();
   }

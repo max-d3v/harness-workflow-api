@@ -6,14 +6,8 @@ import treeKill from "tree-kill";
 import { $ } from "bun";
 import { imageServer } from "../tools/screenshot-upload.js";
 
-const githubEnv = process.env.MAX_DEV_GITHUB_TOKEN
+const githubEnv = process.env.MAX_TRAZO_GITHUB_TOKEN
 if (!githubEnv) throw Error("No github token provided.")
-
-  /*
-  [codeTest:tester] round 84: assistant → tool_use mcp__github__add_issue_comment({"owner":"max-d3v","repo":"cracked-kit-monorepo-boilerplate","issue_number":3,"body":"✅ **Task creation defaults to \"To Do\" status after preferences removal**\n\nSteps taken:\n1. Navigated to `/dashboard/tasks`.\n2. Clicked \"New Task\".\n3. Entered title \"QA test - post-pref-removal default status\" and clicked \"Create Task\".\n4. Verified the newly created task appears in the list with \"To Do\" badge.\n\nThe `createTask` use-case now hardcodes `status: \"todo\"` instead of reading `defaul…(+290 chars))
-[codeTest:tester] round 85: user ← tool_result(error): MCP error -32603: Permission Denied: Resource not accessible by personal access token
-
-  */
 
 interface CodeTestInput {
   // Repo path (worktree or local checkout). Required: the PR diff/comment
@@ -72,10 +66,18 @@ const TESTER_SYSTEM_PROMPT = `
 You are a senior QA analyst doing end-to-end testing of a running web application.
 
 You will receive a git diff from a pull request and a base URL where the app is running.
-Use the Playwright browser tools to exercise the app:
-- Test what the diff introduces or changes.
-- Test areas the diff could plausibly affect (regressions).
-- Probe edge cases that could slip through (empty/invalid input, auth boundaries, navigation, error states).
+Your scope is the diff. Before touching the browser, read the
+full diff and list (for yourself) the concrete user-facing behaviors it changes:
+the specific screens, forms, flows, or data the changed lines actually run in.
+
+Use the Playwright browser tools to exercise those behaviors:
+- Test the exact behavior the diff introduces or changes, via the real UI path
+  that hits the changed code.
+- Test a regression ONLY when you can trace a direct code path from the diff to
+  it (e.g. the diff renames a table/column that another screen reads or writes).
+  State that link explicitly in the comment.
+- Edge cases (empty/invalid input, error states) are in scope only for the
+  inputs and flows the diff touches.
 
 ## Report as you go — do NOT write a final summary
 
@@ -168,12 +170,6 @@ async function pidsOnPort(port: number): Promise<number[]> {
   return [...new Set(out.split(/\s+/).map(Number).filter((n) => n > 0))];
 }
 
-// No agent: we already know the PIDs/port, so killing is deterministic.
-// tree-kill walks and kills the whole process tree — dev servers spawn
-// children (npm→node→vite) that orphan if only the parent is killed — and
-// is cross-OS (taskkill /T on Windows, recursive ps on POSIX). The port
-// sweep is a fallback for when the captured PID was a wrapper, not the
-// process actually bound to the port.
 async function killDevServer(server: DevServer): Promise<void> {
   const targets = new Set<number>(server.pids.filter((n) => n > 0));
   if (server.port) {
@@ -237,7 +233,7 @@ ${diff}
 \`\`\`
 
 `;
-    const { result, sessionId } = await queryAgentReadOnly({
+    const { result, sessionId, totalTokens, usage, totalCostUsd } = await queryAgentReadOnly({
       prompt,
       project,
       systemPrompt: TESTER_SYSTEM_PROMPT,
@@ -253,7 +249,15 @@ ${diff}
 
     console.log(`[codeTest] tester agent result:\n${result}`);
 
-    return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number };
+    await commentOnPR(
+      project,
+      input.pr,
+      `🏁 **Automated testing finished.**\n\nThe tester agent has completed exercising this PR. Individual findings are posted as separate comments above.`,
+    ).catch((commentErr) =>
+      console.error(`[codeTest] failed to post completion comment:`, commentErr),
+    );
+
+    return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, totalTokens, usage, totalCostUsd };
   } catch (err) {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
     console.error(`[codeTest] tester agent threw:\n${message}`);

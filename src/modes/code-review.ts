@@ -57,7 +57,7 @@ ${stat}
 ${diff}
 \`\`\``;
 
-  const { result, sessionId } = await queryAgentReadOnly({
+  const { result, sessionId, totalTokens, usage, totalCostUsd } = await queryAgentReadOnly({
     prompt,
     project,
     systemPrompt: SYSTEM_PROMPT,
@@ -69,5 +69,5 @@ ${diff}
 
   await commentOnPR(project, input.pr, result);
 
-  return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number };
+  return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, totalTokens, usage, totalCostUsd };
 }
