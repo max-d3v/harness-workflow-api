@@ -1,7 +1,7 @@
 import { $ } from "bun";
 import { randomBytes } from "crypto";
 import path from "path";
-import { rm } from "fs/promises";
+import { realpath, rm, stat } from "fs/promises";
 
 export interface WorktreeContext {
   worktreePath: string;
@@ -82,6 +82,11 @@ export interface PRInfo {
   repo: string;
 }
 
+export interface ReviewCwd {
+  reviewCwd: string;
+  worktreePath: string | null;
+}
+
 export async function getPRInfo(project: string, pr: string | number): Promise<PRInfo> {
   const json = await $`gh pr view ${pr} --json number,title,baseRefName,headRefName,url`.cwd(project).text();
   const data = JSON.parse(json);
@@ -99,6 +104,108 @@ export async function getPRInfo(project: string, pr: string | number): Promise<P
     owner,
     repo,
   };
+}
+
+export async function getCurrentBranch(project: string): Promise<string | null> {
+  const branch = await $`git -C ${project} branch --show-current`.text();
+  return branch.trim() || null;
+}
+
+function sanitizeBranchPart(value: string): string {
+  return value.replace(/[^A-Za-z0-9._/-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+export function resolvePullRequestWorktreeLocalBranchName(pullRequest: PRInfo): string {
+  const owner = sanitizeBranchPart(pullRequest.owner);
+  const repo = sanitizeBranchPart(pullRequest.repo);
+  const headBranch = sanitizeBranchPart(pullRequest.headBranch).replace(/\//g, "-");
+  return `pr/${owner}-${repo}-${pullRequest.number}-${headBranch}`;
+}
+
+async function canonicalizeExistingPath(filePath: string): Promise<string> {
+  return realpath(filePath);
+}
+
+async function findExistingHeadBranchWorktree(
+  cwd: string,
+  rootWorktreePath: string,
+  pullRequest: PRInfo,
+  localPullRequestBranch: string,
+): Promise<string | null> {
+  const format = "%(refname:short)%00%(worktreepath)";
+  const refs = await $`git -C ${cwd} for-each-ref --format=${format} refs/heads`.text();
+  for (const line of refs.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const [name, worktreePath] = line.split("\0");
+    if (!name || !worktreePath) continue;
+    if (name !== localPullRequestBranch && name !== pullRequest.headBranch) continue;
+
+    const canonical = await canonicalizeExistingPath(worktreePath);
+    if (canonical !== rootWorktreePath) {
+      return worktreePath;
+    }
+  }
+  return null;
+}
+
+async function materializePullRequestHeadBranch(
+  cwd: string,
+  pullRequest: PRInfo,
+  localPullRequestBranch: string,
+): Promise<void> {
+  await $`git -C ${cwd} fetch origin +refs/pull/${pullRequest.number}/head:refs/heads/${localPullRequestBranch}`.quiet();
+}
+
+async function nextAvailableWorktreePath(cwd: string, branch: string): Promise<string> {
+  const baseName = branch.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const basePath = path.join(cwd, ".worktrees", baseName);
+  for (let i = 0; i < 100; i++) {
+    const candidate = i === 0 ? basePath : `${basePath}-${i}`;
+    const exists = await stat(candidate)
+      .then(() => true)
+      .catch(() => false);
+    if (!exists) return candidate;
+  }
+  return `${basePath}-${randomBytes(4).toString("hex")}`;
+}
+
+export async function resolveReviewCwd(input: {
+  cwd: string;
+  initialBranch: string | null;
+  pullRequest: PRInfo;
+}): Promise<ReviewCwd> {
+  if (input.initialBranch === input.pullRequest.headBranch) {
+    return { reviewCwd: input.cwd, worktreePath: null };
+  }
+
+  const localPullRequestBranch = resolvePullRequestWorktreeLocalBranchName(input.pullRequest);
+  const rootWorktreePath = await canonicalizeExistingPath(input.cwd);
+
+  const existing = await findExistingHeadBranchWorktree(
+    input.cwd,
+    rootWorktreePath,
+    input.pullRequest,
+    localPullRequestBranch,
+  );
+  if (existing) {
+    return { reviewCwd: existing, worktreePath: existing };
+  }
+
+  await materializePullRequestHeadBranch(input.cwd, input.pullRequest, localPullRequestBranch);
+
+  const afterFetch = await findExistingHeadBranchWorktree(
+    input.cwd,
+    rootWorktreePath,
+    input.pullRequest,
+    localPullRequestBranch,
+  );
+  if (afterFetch) {
+    return { reviewCwd: afterFetch, worktreePath: afterFetch };
+  }
+
+  const worktreePath = await nextAvailableWorktreePath(input.cwd, localPullRequestBranch);
+  await $`git -C ${input.cwd} worktree add ${worktreePath} ${localPullRequestBranch}`.quiet();
+  return { reviewCwd: worktreePath, worktreePath };
 }
 
 export async function getPRDiff(project: string, pr: string | number): Promise<string> {

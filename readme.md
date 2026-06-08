@@ -7,6 +7,7 @@ Use your Claude subscription plan through an HTTP wrapper to make autonomous cod
 
 - Bun
 - Logged-in Claude CLI
+- Logged-in Codex CLI (optional, for `cli: "codex"`)
 - Logged-in GitHub CLI
 
 # Modes
@@ -28,7 +29,8 @@ request:
 {
   "prompt": "Implement a simple readme change - add a smiling face somewhere",
   "project": "code/nextjs-boilerplate",
-  "originBranch": "main"
+  "originBranch": "main",
+  "cli": "codex"
 }
 ```
 
@@ -64,7 +66,9 @@ response:
 
 # Defaults and more details
 
-Each mode has defaults to opus with high reasoning effort, But can pass your own preferences in each request.
+Claude Code is the default CLI. Pass `"cli": "codex"` (or `"provider": "codex"`) to use `codex exec` instead. Mode calls resolve `model` and `effort` from `provider_defaults` in `src/config.ts` unless the request overrides them.
+
+If a provider or mode has no configured defaults, requests must pass the missing values explicitly or the API will throw.
 
 Each mode has their set of tools, prompt with all and code-review with read-only tools.
 

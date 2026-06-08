@@ -75,7 +75,7 @@ app.post("/mode/:name", async (req: Request, res: Response) => {
 app.listen(PORT, () => {
   console.log(`
   Claude Harness API — http://localhost:${PORT}
-  Auth: Claude CLI OAuth | Runtime: Bun ${Bun.version}
+  Auth: Claude CLI OAuth or Codex CLI | Runtime: Bun ${Bun.version}
 
   POST /prompt       Run agent in worktree → commit → push → PR
   POST /mode/:name   Specific mode (${Object.keys(MODES).join(", ")})

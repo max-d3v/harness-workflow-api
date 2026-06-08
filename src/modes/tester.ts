@@ -1,5 +1,13 @@
-import { queryAgentReadOnly, queryAgentTask, resolvePath } from "../agent.js";
-import { getPRInfo, getPRDiff, getPRDiffStat, commentOnPR } from "../git.js";
+import { queryAgentReadOnly, queryAgentTask, resolvePath, type AgentCli, type AgentOptions } from "../agent.js";
+import { resolveProviderDefaults } from "../config.js";
+import {
+  getCurrentBranch,
+  getPRInfo,
+  getPRDiff,
+  getPRDiffStat,
+  commentOnPR,
+  resolveReviewCwd,
+} from "../git.js";
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import { promisify } from "node:util";
 import treeKill from "tree-kill";
@@ -18,10 +26,12 @@ interface CodeTestInput {
   url?: string;
   focus?: string;
   loginInstructions?: string;
+  cli?: AgentCli;
+  provider?: AgentCli;
+  model?: string;
+  serverModel?: string;
+  effort?: AgentOptions["effort"];
 }
-
-const TESTER_TOOLS = ["Read", "Glob", "Grep"];
-const SERVER_AGENT_TOOLS = ["Bash", "Read", "Glob", "Grep"];
 
 const MCP_SERVERS: Record<string, McpServerConfig> = {
   playwright: {
@@ -125,7 +135,15 @@ function parseJsonBlock(text: string): any {
   return JSON.parse(candidate.trim());
 }
 
-async function startDevServer(project: string, diffStat: string): Promise<DevServer> {
+async function startDevServer(
+  project: string,
+  diffStat: string,
+  opts: Pick<CodeTestInput, "cli" | "provider" | "serverModel" | "effort">,
+): Promise<DevServer> {
+  const defaults = resolveProviderDefaults("qa", {
+    ...opts,
+    model: opts.serverModel,
+  });
   const { result } = await queryAgentTask({
     prompt: `Start the dev server for the project in this directory: ${project}
 
@@ -135,10 +153,11 @@ ${diffStat}
 \`\`\``,
     project,
     cwd: project,
+    cli: defaults.provider,
+    agentMode: "qa_dev_server",
     systemPrompt: SERVER_INITIATOR_SYSTEM_PROMPT,
-    tools: SERVER_AGENT_TOOLS,
-    model: "claude-opus-4-6",
-    effort: "high",
+    model: defaults.model,
+    effort: defaults.effort,
     maxTurns: 30,
     loadProjectSettings: true,
     logLabel: "codeTest:dev-server",
@@ -187,7 +206,7 @@ async function killDevServer(server: DevServer): Promise<void> {
   for (const pid of targets) await killTree(pid, "SIGKILL").catch(() => { });
 }
 
-export async function codeTest(input: CodeTestInput) {
+export async function codeTest(input: CodeTestInput, _signal?: AbortSignal) {
   if (!input.project) throw new Error("Missing required field: project");
   if (!input.pr) throw new Error("Missing required field: pr");
 
@@ -203,12 +222,20 @@ export async function codeTest(input: CodeTestInput) {
     return { result: "No changes found in PR", prUrl: prInfo.url };
   }
 
+  const initialBranch = await getCurrentBranch(project);
+  const { reviewCwd } = await resolveReviewCwd({
+    cwd: project,
+    initialBranch,
+    pullRequest: prInfo,
+  });
+  console.log(`[codeTest] using review cwd: ${reviewCwd}`);
+
   let server: DevServer | null = null;
   let testUrl: string;
   if (input.url) {
     testUrl = input.url;
   } else {
-    server = await startDevServer(project, stat);
+    server = await startDevServer(reviewCwd, stat, input);
     testUrl = server.url;
   }
 
@@ -233,16 +260,24 @@ ${diff}
 \`\`\`
 
 `;
+    const defaults = resolveProviderDefaults("qa", input);
+    if (defaults.provider === "codex") {
+      console.warn(
+        "[codeTest] Codex SDK does not receive this mode's per-run MCP server config; it will use the local Codex configuration.",
+      );
+    }
     const { result, sessionId, model, totalTokens, usage, totalCostUsd } = await queryAgentReadOnly({
       prompt,
-      project,
+      project: reviewCwd,
+      cwd: reviewCwd,
+      cli: defaults.provider,
+      agentMode: "qa_tester",
       systemPrompt: TESTER_SYSTEM_PROMPT,
-      tools: TESTER_TOOLS,
       mcpServers: MCP_SERVERS,
       allowedTools: MCP_TOOLS_ALLOWED,
-      model: "claude-sonnet-4-6",
-      effort: "high",
-      maxTurns: 110,
+      model: defaults.model,
+      effort: defaults.effort,
+      maxTurns: 210,
       loadProjectSettings: true,
       logLabel: "codeTest:tester",
     });
