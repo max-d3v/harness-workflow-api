@@ -233,7 +233,7 @@ ${diff}
 \`\`\`
 
 `;
-    const { result, sessionId, totalTokens, usage, totalCostUsd } = await queryAgentReadOnly({
+    const { result, sessionId, model, totalTokens, usage, totalCostUsd } = await queryAgentReadOnly({
       prompt,
       project,
       systemPrompt: TESTER_SYSTEM_PROMPT,
@@ -257,7 +257,7 @@ ${diff}
       console.error(`[codeTest] failed to post completion comment:`, commentErr),
     );
 
-    return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, totalTokens, usage, totalCostUsd };
+    return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, model, totalTokens, usage, totalCostUsd };
   } catch (err) {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
     console.error(`[codeTest] tester agent threw:\n${message}`);

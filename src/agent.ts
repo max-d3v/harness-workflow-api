@@ -46,6 +46,8 @@ export interface AgentResult {
   sessionId?: string;
   prUrl?: string;
   branch?: string;
+  /** Model the SDK actually ran with for this query. */
+  model?: string;
   /** input + output + cache creation + cache read tokens for the run. */
   totalTokens?: number;
   usage?: TokenUsage;
@@ -56,7 +58,7 @@ export interface AgentResult {
 const DEFAULTS = {
   model: "claude-opus-4-6",
   effort: "high" as const,
-  maxTurns: 10,
+  maxTurns: 30,
   tools: { type: "preset" as const, preset: "claude_code" as const },
 };
 
@@ -129,6 +131,18 @@ function summarizeMessage(msg: any): string | undefined {
   }
 }
 
+function extractModel(message: any): string | undefined {
+  if (message?.type === "system" && message?.subtype === "init") {
+    return message.model ?? message.data?.model;
+  }
+  if (message?.type === "assistant") {
+    return message.message?.model;
+  }
+  if (message?.type === "result") {
+    return message.model ?? message.modelId;
+  }
+}
+
 async function collectQuery(
   prompt: string,
   options: ReturnType<typeof buildSdkOptions>,
@@ -136,12 +150,14 @@ async function collectQuery(
 ): Promise<{
   result: string;
   sessionId?: string;
+  model?: string;
   totalTokens?: number;
   usage?: TokenUsage;
   totalCostUsd?: number;
 }> {
   let result = "";
   let sessionId: string | undefined;
+  let model: string | undefined;
   let usage: TokenUsage | undefined;
   let totalTokens: number | undefined;
   let totalCostUsd: number | undefined;
@@ -149,6 +165,7 @@ async function collectQuery(
 
   for await (const msg of query({ prompt, options })) {
     sessionId ??= extractSessionId(msg);
+    model ??= extractModel(msg);
     if (logLabel) {
       const summary = summarizeMessage(msg);
       if (summary) console.log(`[${logLabel}] round ${++round}: ${summary}`);
@@ -174,7 +191,8 @@ async function collectQuery(
     if ("result" in msg) result = (msg as any).result;
   }
 
-  return { result, sessionId, totalTokens, usage, totalCostUsd };
+  model ??= options.model;
+  return { result, sessionId, model, totalTokens, usage, totalCostUsd };
 }
 
 export async function queryAgent(opts: AgentOptions): Promise<AgentResult> {
@@ -182,7 +200,7 @@ export async function queryAgent(opts: AgentOptions): Promise<AgentResult> {
   const ctx = await createWorktree(project, opts.originBranch);
 
   try {
-    const { result, sessionId, totalTokens, usage, totalCostUsd } = await collectQuery(
+    const { result, sessionId, model, totalTokens, usage, totalCostUsd } = await collectQuery(
       opts.prompt,
       buildSdkOptions(opts, ctx.worktreePath),
       opts.logLabel,
@@ -200,7 +218,7 @@ export async function queryAgent(opts: AgentOptions): Promise<AgentResult> {
       }
     }
 
-    return { result, sessionId, prUrl, branch: ctx.branch, totalTokens, usage, totalCostUsd };
+    return { result, sessionId, prUrl, branch: ctx.branch, model, totalTokens, usage, totalCostUsd };
   } finally {
     await ctx.cleanup();
   }
