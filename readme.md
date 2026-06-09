@@ -1,24 +1,29 @@
-# Claude Harness API 🦹
+# Coding Harness API 🦹
 
-
-Use your Claude subscription plan through an HTTP wrapper to make autonomous coding agents for 1/5 of the price.
+Use your Claude or Codex subscription plan through an HTTP wrapper to create autonomous coding agents and automations (code reviews, QA agents) for one-fifth of the price.
 
 # Prerequisites
 
 - Bun
-- Logged-in Claude CLI
-- Logged-in Codex CLI (optional, for `cli: "codex"`)
-- Logged-in GitHub CLI
+- Either a logged-in Claude CLI or a logged-in Codex CLI
+- A logged-in GitHub CLI
+- [Gitshot](https://github.com/vipulgupta2048/gitshot), via `npx`, for uploading QA screenshots to a dedicated image repo on the logged-in GitHub account so they can be embedded in PR comments
 
 # Modes
 
 ## Prompt
 
-Given your prompt, project, and origin branch, it will create a worktree, apply changes, and open a draft PR.
+Given your prompt, project, and origin branch, it creates a worktree, applies changes, and opens a draft PR.
 
 ## Code review
 
-Given a PR and project, it will analyze the PR with my code review prompt and add a comment with the review.
+Given a PR and project, the harness you choose performs a review with Cursor's internal team code review prompt (the best I have used by far) and adds it as a comment on the PR.
+
+## QA
+
+Given a PR and a project, the harness spawns two agents: one starts the dev server related to the change, and the other uses Playwright or browser MCP, the diff context, and any optional login information you passed to access the application and test it.
+At the end, the QA dev server is killed.
+It adds comments to the PR with its findings as it goes, so if it gets stuck or throws an error, the things it already tested will remain.
 
 # Examples
 
@@ -64,31 +69,53 @@ response:
 }
 ```
 
+## POST /mode/code-test
+
+request:
+```json
+{
+  "pr": 2,
+  "project": "code/nextjs-boilerplate",
+  "loginInstructions": "email: automation@gmail.com, senha: automationPassword, username: automation" // This is a dummy profile I created in my app's auth for the agent to access.
+}
+```
+
+response:
+```json
+{
+  "result": "## ",
+  "sessionId": "7207f92b-d5a3-4162-949c-90a25d26e737",
+  "prUrl": "https://github.com/max-d3v/orion-kit/pull/2",
+  "prNumber": 2
+}
+```
+
 # Defaults and more details
 
 Claude Code is the default CLI. Pass `"cli": "codex"` (or `"provider": "codex"`) to use `codex exec` instead. Mode calls resolve `model` and `effort` from `provider_defaults` in `src/config.ts` unless the request overrides them.
 
 If a provider or mode has no configured defaults, requests must pass the missing values explicitly or the API will throw.
 
-Each mode has their set of tools, prompt with all and code-review with read-only tools.
+Each mode has its own set of tools: prompt mode has all tools, and code-review mode has read-only tools.
 
-You can persist sessions, but I’m against it. If you have a problem big enough that Opus with high reasoning can’t one shot, just use your t3code locally and go at it.
+You can persist sessions, but I’m against it. If you have a problem big enough that Opus with high reasoning can’t one-shot, just use your t3code locally and go at it.
 
 # Why?
+You might be asking, why not use CodeRabbit or something?
 
-Like I already said, this makes autonomous coding agents way cheaper for 2 reasons:
+Like I already said, this makes autonomous coding agents way cheaper for two reasons:
 
 1. **Using your own computer to run queries**  
-   Since all this does is use Claude Code, which is not heavy, there’s no heavy load.
+   Instead of paying for compute at a premium, use your PC to run the harness. Most agents are light, and you are already paying for the model.
 
-2. **Using a Claude Code plan**  
-   APIs from Anthropic, OpenAI, etc. are usage-cost based, so depending on your plan, they can be 5x–10x more expensive per token than your subscription.
+2. **Using a Subscription rather than APIs**  
+   APIs from Anthropic, OpenAI, etc. are usage-cost-based, so depending on your plan, they can be 5x–10x more expensive per token than your subscription.
 
 This also makes code reviewers better for one reason:
 
-I know people say Claude Code is not the best harness, but it’s still made by the creators of the model, so even with high token spendage, I deem it a good harness.
+I know people say Claude Code is not the best harness, but it’s still made by the creators of the model, so even with high token spending, I deem it a good harness.
 
-SaaS code reviewers (like code rabbit, greptile etc.) use their own harnesses (unreliable), worst models (You can use opus here which i deem the best model for coding) and super expensive monthly plans (obviously, they have to pay usage-based tokens for their model inference). Their only advantage is maybe that they have better code review prompts, which are a small part of the results.
+SaaS code reviewers (like CodeRabbit, Greptile, etc.) use their own harnesses (unreliable), worse models (you can use the best models here, like Opus 4.8 or GPT-5.5, which are significantly better), and because these third parties pay full API price, they have super expensive monthly plans.
 
 # How I will use it
 
@@ -96,10 +123,12 @@ First, keep in mind that all git actions taken from this API are done as the log
 
 I’ll expose this via ngrok for integrations with Linear and GitHub.
 
-I’ll use `/prompt` for small, well-described Linear problems that i think opus can one-shot. You can use your own information hub like jira or sum other bs.
+I am using `/prompt` for small, well-described Linear problems that I think Opus can one-shot. You can use your own information hub, like Jira or some other BS.
 
-I’ll use `/mode/code-review` for every PR opened in the projects I choose, via GitHub Actions just calling this API with the necessary info.
+I am using `/mode/code-review` for every PR opened in the projects I choose, via GitHub Actions calling this API with the necessary info. (see /examples; it is the exact one I use)
+
+I am still experimenting with `/mode/code-test`, since I am not sure it is worth its tokens for most use cases, so I am just calling it manually for some PRs.
 
 # Will this get DMCA'd?
 
-Anthropic, if you are seeing this, please hire me. I’ll nuke this repo. Please Anthropic.
+Anthropic or OpenAI, if you are seeing this, please hire me. I’ll nuke this repo. Please Anthropic.
