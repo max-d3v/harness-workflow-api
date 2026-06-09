@@ -2,7 +2,7 @@ name: Code Review
 
 on:
   pull_request:
-    types: [opened]
+    types: [opened, synchronize, reopened]
 
 jobs:
   code-review:
@@ -16,5 +16,5 @@ jobs:
         run: |
           curl -X POST "${CLAUDE_HARNESS_API_URL}/mode/code-review" \
             -H "Content-Type: application/json" \
-            -d "{\"pr\": \"${{ github.event.pull_request.number }}\", \"project\": \"${PROJECT_LOCAL_PATH}\"}" \
+            -d "{\"pr\": \"${{ github.event.pull_request.number }}\", \"project\": \"${PROJECT_LOCAL_PATH}\", \"provider\": \"codex\"}" \
             --fail --silent --show-error

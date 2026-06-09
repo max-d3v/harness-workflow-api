@@ -6,8 +6,13 @@ import {
   getPRDiff,
   getPRDiffStat,
   commentOnPR,
-  resolveReviewCwd,
+  resolvePRHeadBranchCwd,
 } from "../git.js";
+import {
+  beginPullRequestRun,
+  isSupersededPullRequestRun,
+  pullRequestRunKindLabel,
+} from "../pr-run-controller.js";
 
 interface CodeReviewInput {
   project: string;
@@ -247,15 +252,36 @@ export async function codeReview(input: CodeReviewInput, _signal?: AbortSignal) 
   if (!input.pr) throw new Error("Missing required field: pr");
 
   const project = resolvePath(input.project);
+  const run = beginPullRequestRun({
+    kind: "code-review",
+    project,
+    pr: input.pr,
+    requestSignal: _signal,
+  });
 
   console.log(`[codeReview] reviewing PR ${input.pr} in ${project}`);
 
+  let cleanupPRHeadBranchCwd: () => Promise<void> = async () => { };
+
+  const throwIfCancelled = () => {
+    if (run.signal.aborted) {
+      throw run.signal.reason ?? new Error("Automated review cancelled without reason.");
+    }
+  };
+
   try {
+    const startComment = run.replacedExisting
+      ? `♻️ **Previous Code Reviewing run stopped.**\n\nA newer automated review was requested for this PR, so the older run was cancelled and this new review is starting now.`
+      : `🔎 **Automated review started.**`;
+    await commentOnPR(project, input.pr, startComment)
+    throwIfCancelled();
+
     const [prInfo, diff, stat] = await Promise.all([
       getPRInfo(project, input.pr),
       getPRDiff(project, input.pr),
       getPRDiffStat(project, input.pr),
     ]);
+    throwIfCancelled();
 
     if (!diff) {
       console.log(`[codeReview] PR #${prInfo.number} has no changes — skipping`);
@@ -267,12 +293,15 @@ export async function codeReview(input: CodeReviewInput, _signal?: AbortSignal) 
     );
 
     const initialBranch = await getCurrentBranch(project);
-    const { reviewCwd } = await resolveReviewCwd({
+    const prHeadBranchContext = await resolvePRHeadBranchCwd({
       cwd: project,
       initialBranch,
       pullRequest: prInfo,
     });
-    console.log(`[codeReview] using review cwd: ${reviewCwd}`);
+    cleanupPRHeadBranchCwd = prHeadBranchContext.cleanup;
+    const { prHeadBranchCwd } = prHeadBranchContext;
+    console.log(`[codeReview] using PR head branch cwd: ${prHeadBranchCwd}`);
+    throwIfCancelled();
 
     const focus = input.focus ? `\nFocus area: ${input.focus}` : "";
     const prompt = `Review PR #${prInfo.number}: "${prInfo.title}" (${prInfo.headBranch} → ${prInfo.baseBranch}).${focus}
@@ -290,8 +319,8 @@ ${diff}
     const defaults = resolveProviderDefaults("code_review", input);
     const { result, sessionId, model, totalTokens, usage, totalCostUsd } = await queryAgentReadOnly({
       prompt,
-      project: reviewCwd,
-      cwd: reviewCwd,
+      project: prHeadBranchCwd,
+      cwd: prHeadBranchCwd,
       cli: defaults.provider,
       agentMode: "code_review",
       systemPrompt: THERMO_NUCLEAR_REVIEW_PROMPT,
@@ -299,7 +328,9 @@ ${diff}
       effort: defaults.effort,
       loadProjectSettings: true,
       logLabel: "codeReview",
+      abortController: run.controller,
     });
+    throwIfCancelled();
 
     console.log(`[codeReview] reviewer agent result:\n${result}`);
 
@@ -309,6 +340,18 @@ ${diff}
 
     return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, model, totalTokens, usage, totalCostUsd };
   } catch (err) {
+    if (isSupersededPullRequestRun(run.signal)) {
+      console.log(`[codeReview] PR ${input.pr} review stopped for a newer request`);
+      return {
+        result: "Automated review stopped because a newer review was requested for this PR.",
+        stopped: true,
+      };
+    }
+    if (run.signal.aborted) {
+      console.log(`[codeReview] PR ${input.pr} review cancelled`);
+      throw err;
+    }
+
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[codeReview] review failed:`, err);
 
@@ -325,5 +368,10 @@ ${message}
     );
 
     throw err;
+  } finally {
+    await cleanupPRHeadBranchCwd().catch((cleanupErr) =>
+      console.error(`[codeReview] failed to clean up PR head branch worktree:`, cleanupErr),
+    );
+    run.finish();
   }
 }

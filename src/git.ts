@@ -82,9 +82,11 @@ export interface PRInfo {
   repo: string;
 }
 
-export interface ReviewCwd {
-  reviewCwd: string;
+export interface PRHeadBranchCwd {
+  prHeadBranchCwd: string;
   worktreePath: string | null;
+  createdWorktreePath: string | null;
+  cleanup: () => Promise<void>;
 }
 
 export async function getPRInfo(project: string, pr: string | number): Promise<PRInfo> {
@@ -122,8 +124,17 @@ export function resolvePullRequestWorktreeLocalBranchName(pullRequest: PRInfo): 
   return `pr/${owner}-${repo}-${pullRequest.number}-${headBranch}`;
 }
 
+async function localBranchExists(cwd: string, branch: string): Promise<boolean> {
+  const result = await $`git -C ${cwd} rev-parse --verify --quiet refs/heads/${branch}`.nothrow().quiet();
+  return result.exitCode === 0;
+}
+
 async function canonicalizeExistingPath(filePath: string): Promise<string> {
   return realpath(filePath);
+}
+
+async function pruneStaleWorktrees(cwd: string): Promise<void> {
+  await $`git -C ${cwd} worktree prune`.quiet().catch(() => {});
 }
 
 async function findExistingHeadBranchWorktree(
@@ -132,6 +143,8 @@ async function findExistingHeadBranchWorktree(
   pullRequest: PRInfo,
   localPullRequestBranch: string,
 ): Promise<string | null> {
+  await pruneStaleWorktrees(cwd);
+
   const format = "%(refname:short)%00%(worktreepath)";
   const refs = await $`git -C ${cwd} for-each-ref --format=${format} refs/heads`.text();
   for (const line of refs.split(/\r?\n/)) {
@@ -140,7 +153,12 @@ async function findExistingHeadBranchWorktree(
     if (!name || !worktreePath) continue;
     if (name !== localPullRequestBranch && name !== pullRequest.headBranch) continue;
 
-    const canonical = await canonicalizeExistingPath(worktreePath);
+    const canonical = await canonicalizeExistingPath(worktreePath).catch(async () => {
+      await pruneStaleWorktrees(cwd);
+      return null;
+    });
+    if (!canonical) continue;
+
     if (canonical !== rootWorktreePath) {
       return worktreePath;
     }
@@ -169,17 +187,44 @@ async function nextAvailableWorktreePath(cwd: string, branch: string): Promise<s
   return `${basePath}-${randomBytes(4).toString("hex")}`;
 }
 
-export async function resolveReviewCwd(input: {
+async function removeReviewWorktree(
+  cwd: string,
+  worktreePath: string,
+  localBranch: string,
+  deleteLocalBranch: boolean,
+): Promise<void> {
+  try {
+    await $`git -C ${cwd} worktree remove --force ${worktreePath}`.quiet();
+  } catch {
+    await rm(worktreePath, { recursive: true, force: true });
+    await $`git -C ${cwd} worktree prune`.quiet();
+  }
+
+  if (deleteLocalBranch) {
+    await $`git -C ${cwd} branch -D ${localBranch}`.quiet().catch(() => {});
+  }
+}
+
+function onceCleanup(cleanup: () => Promise<void>): () => Promise<void> {
+  let cleanupPromise: Promise<void> | null = null;
+  return () => {
+    cleanupPromise ??= cleanup();
+    return cleanupPromise;
+  };
+}
+
+export async function resolvePRHeadBranchCwd(input: {
   cwd: string;
   initialBranch: string | null;
   pullRequest: PRInfo;
-}): Promise<ReviewCwd> {
+}): Promise<PRHeadBranchCwd> {
   if (input.initialBranch === input.pullRequest.headBranch) {
-    return { reviewCwd: input.cwd, worktreePath: null };
+    return { prHeadBranchCwd: input.cwd, worktreePath: null, createdWorktreePath: null, cleanup: async () => {} };
   }
 
   const localPullRequestBranch = resolvePullRequestWorktreeLocalBranchName(input.pullRequest);
   const rootWorktreePath = await canonicalizeExistingPath(input.cwd);
+  const hadLocalPullRequestBranch = await localBranchExists(input.cwd, localPullRequestBranch);
 
   const existing = await findExistingHeadBranchWorktree(
     input.cwd,
@@ -188,7 +233,7 @@ export async function resolveReviewCwd(input: {
     localPullRequestBranch,
   );
   if (existing) {
-    return { reviewCwd: existing, worktreePath: existing };
+    return { prHeadBranchCwd: existing, worktreePath: existing, createdWorktreePath: null, cleanup: async () => {} };
   }
 
   await materializePullRequestHeadBranch(input.cwd, input.pullRequest, localPullRequestBranch);
@@ -200,12 +245,27 @@ export async function resolveReviewCwd(input: {
     localPullRequestBranch,
   );
   if (afterFetch) {
-    return { reviewCwd: afterFetch, worktreePath: afterFetch };
+    return { prHeadBranchCwd: afterFetch, worktreePath: afterFetch, createdWorktreePath: null, cleanup: async () => {} };
   }
 
   const worktreePath = await nextAvailableWorktreePath(input.cwd, localPullRequestBranch);
-  await $`git -C ${input.cwd} worktree add ${worktreePath} ${localPullRequestBranch}`.quiet();
-  return { reviewCwd: worktreePath, worktreePath };
+  try {
+    await $`git -C ${input.cwd} worktree add ${worktreePath} ${localPullRequestBranch}`.quiet();
+  } catch (err) {
+    if (!hadLocalPullRequestBranch) {
+      await $`git -C ${input.cwd} branch -D ${localPullRequestBranch}`.quiet().catch(() => {});
+    }
+    throw err;
+  }
+
+  return {
+    prHeadBranchCwd: worktreePath,
+    worktreePath,
+    createdWorktreePath: worktreePath,
+    cleanup: onceCleanup(() =>
+      removeReviewWorktree(input.cwd, worktreePath, localPullRequestBranch, !hadLocalPullRequestBranch),
+    ),
+  };
 }
 
 export async function getPRDiff(project: string, pr: string | number): Promise<string> {

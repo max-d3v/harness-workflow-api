@@ -6,8 +6,13 @@ import {
   getPRDiff,
   getPRDiffStat,
   commentOnPR,
-  resolveReviewCwd,
+  resolvePRHeadBranchCwd,
 } from "../git.js";
+import {
+  beginPullRequestRun,
+  isSupersededPullRequestRun,
+  pullRequestRunKindLabel,
+} from "../pr-run-controller.js";
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import { promisify } from "node:util";
 import treeKill from "tree-kill";
@@ -138,7 +143,9 @@ function parseJsonBlock(text: string): any {
 async function startDevServer(
   project: string,
   diffStat: string,
-  opts: Pick<CodeTestInput, "cli" | "provider" | "serverModel" | "effort">,
+  opts: Pick<CodeTestInput, "cli" | "provider" | "serverModel" | "effort"> & {
+    abortController: AbortController;
+  },
 ): Promise<DevServer> {
   const defaults = resolveProviderDefaults("qa", {
     ...opts,
@@ -161,6 +168,7 @@ ${diffStat}
     maxTurns: 30,
     loadProjectSettings: true,
     logLabel: "codeTest:dev-server",
+    abortController: opts.abortController,
   });
 
   console.log(`[codeTest] dev-server agent result:\n${result}`);
@@ -211,35 +219,61 @@ export async function codeTest(input: CodeTestInput, _signal?: AbortSignal) {
   if (!input.pr) throw new Error("Missing required field: pr");
 
   const project = resolvePath(input.project);
-
-  const [prInfo, diff, stat] = await Promise.all([
-    getPRInfo(project, input.pr),
-    getPRDiff(project, input.pr),
-    getPRDiffStat(project, input.pr),
-  ]);
-
-  if (!diff) {
-    return { result: "No changes found in PR", prUrl: prInfo.url };
-  }
-
-  const initialBranch = await getCurrentBranch(project);
-  const { reviewCwd } = await resolveReviewCwd({
-    cwd: project,
-    initialBranch,
-    pullRequest: prInfo,
+  const run = beginPullRequestRun({
+    kind: "code-test",
+    project,
+    pr: input.pr,
+    requestSignal: _signal,
   });
-  console.log(`[codeTest] using review cwd: ${reviewCwd}`);
 
   let server: DevServer | null = null;
-  let testUrl: string;
-  if (input.url) {
-    testUrl = input.url;
-  } else {
-    server = await startDevServer(reviewCwd, stat, input);
-    testUrl = server.url;
-  }
+  let cleanupPRHeadBranchCwd: () => Promise<void> = async () => {};
+  const throwIfCancelled = () => {
+    if (run.signal.aborted) {
+      throw run.signal.reason ?? new Error("Automated QA cancelled");
+    }
+  };
 
   try {
+    const startComment = run.replacedExisting
+      ? `♻️ **Previous QA Run stopped.**\n\nA newer automated QA run was requested for this PR, so the older run was cancelled and this new QA run is starting now.`
+      : `🧪 **Automated QA started.**`;
+    await commentOnPR(project, input.pr, startComment).catch((commentErr) =>
+      console.error(`[codeTest] failed to post start comment:`, commentErr),
+    );
+    throwIfCancelled();
+
+    const [prInfo, diff, stat] = await Promise.all([
+      getPRInfo(project, input.pr),
+      getPRDiff(project, input.pr),
+      getPRDiffStat(project, input.pr),
+    ]);
+    throwIfCancelled();
+
+    if (!diff) {
+      return { result: "No changes found in PR", prUrl: prInfo.url };
+    }
+
+    const initialBranch = await getCurrentBranch(project);
+    const prHeadBranchContext = await resolvePRHeadBranchCwd({
+      cwd: project,
+      initialBranch,
+      pullRequest: prInfo,
+    });
+    cleanupPRHeadBranchCwd = prHeadBranchContext.cleanup;
+    const { prHeadBranchCwd } = prHeadBranchContext;
+    console.log(`[codeTest] using PR head branch cwd: ${prHeadBranchCwd}`);
+    throwIfCancelled();
+
+    let testUrl: string;
+    if (input.url) {
+      testUrl = input.url;
+    } else {
+      server = await startDevServer(prHeadBranchCwd, stat, { ...input, abortController: run.controller });
+      testUrl = server.url;
+    }
+    throwIfCancelled();
+
     const { loginInstructions } = input
     const loginInstructionsPrompt = `If you need to login into the app, use the following instructions: ${loginInstructions}`
     const focus = input.focus ? `\nFocus area: ${input.focus}` : "";
@@ -268,8 +302,8 @@ ${diff}
     }
     const { result, sessionId, model, totalTokens, usage, totalCostUsd } = await queryAgentReadOnly({
       prompt,
-      project: reviewCwd,
-      cwd: reviewCwd,
+      project: prHeadBranchCwd,
+      cwd: prHeadBranchCwd,
       cli: defaults.provider,
       agentMode: "qa_tester",
       systemPrompt: TESTER_SYSTEM_PROMPT,
@@ -280,7 +314,9 @@ ${diff}
       maxTurns: 210,
       loadProjectSettings: true,
       logLabel: "codeTest:tester",
+      abortController: run.controller,
     });
+    throwIfCancelled();
 
     console.log(`[codeTest] tester agent result:\n${result}`);
 
@@ -294,6 +330,18 @@ ${diff}
 
     return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, model, totalTokens, usage, totalCostUsd };
   } catch (err) {
+    if (isSupersededPullRequestRun(run.signal)) {
+      console.log(`[codeTest] PR ${input.pr} QA stopped for a newer request`);
+      return {
+        result: "Automated QA stopped because a newer QA run was requested for this PR.",
+        stopped: true,
+      };
+    }
+    if (run.signal.aborted) {
+      console.log(`[codeTest] PR ${input.pr} QA cancelled`);
+      throw err;
+    }
+
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
     console.error(`[codeTest] tester agent threw:\n${message}`);
     await commentOnPR(
@@ -307,5 +355,9 @@ ${diff}
   } finally {
     console.log("KILLING DEV SERVER", server)
     if (server) await killDevServer(server);
+    await cleanupPRHeadBranchCwd().catch((cleanupErr) =>
+      console.error(`[codeTest] failed to clean up PR head branch worktree:`, cleanupErr),
+    );
+    run.finish();
   }
 }
