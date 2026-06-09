@@ -24,7 +24,7 @@ export interface AgentOptions {
   /** When set, streamed model actions are logged with this prefix. */
   logLabel?: string;
   /** When provided, aborting this controller cancels the running query. */
-  abortController?: AbortController;
+  abortController: AbortController;
 }
 
 export interface TokenUsage {

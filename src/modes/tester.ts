@@ -238,7 +238,7 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
 
   try {
     const startComment = run.replacedExisting
-      ? `♻️ **Previous QA Run stopped.**\n\nA newer automated QA run was requested for this PR, so the older run was cancelled and this new QA run is starting now.`
+      ? `♻️ **New QA Run Started.**\n\nA newer automated QA run was requested for this PR, so the older run was cancelled and this new QA run is starting now.`
       : `🧪 **Automated QA started.**`;
     await commentOnPR(project, input.pr, startComment).catch((commentErr) =>
       log("codeTest", "failed to post start comment:", commentErr),
@@ -334,6 +334,8 @@ ${diff}
         result: "Automated QA stopped because a newer QA run was requested for this PR.",
         stopped: true,
       };
+
+      
     }
     if (run.signal.aborted) {
       log("codeTest", `request cancelled: PR ${input.pr} QA cancelled`);

@@ -133,7 +133,7 @@ export async function collectCodexSdk(opts: AgentOptions, cwd: string): Promise<
     skipGitRepoCheck: true,
   });
   const { events } = await thread.runStreamed(buildCodexPrompt(opts.prompt, opts.systemPrompt), {
-    signal: opts.abortController?.signal,
+    signal: opts.abortController.signal,
   });
 
   let result = "";
