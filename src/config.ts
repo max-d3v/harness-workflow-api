@@ -1,6 +1,9 @@
 export type ModeDefaultsName = "code_review" | "prompt" | "qa";
 export type Effort = "low" | "medium" | "high" | "max";
 
+// Controls verbose provider stream logs: reasoning, model text, tool calls, and step updates.
+export const show_model_actions = true;
+
 interface ModeDefaults {
   model: string;
   effort: Effort;

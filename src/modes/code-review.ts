@@ -1,5 +1,6 @@
-import { queryAgentReadOnly, resolvePath, type AgentCli, type AgentOptions } from "../agent.js";
-import { resolveProviderDefaults } from "../config.js";
+import { queryAgentReadOnly, resolvePath, type AgentCli, type AgentOptions } from "../agent.ts";
+import { resolveProviderDefaults } from "../config.ts";
+import { logModel } from "../logging.ts";
 import {
   getCurrentBranch,
   getPRInfo,
@@ -7,12 +8,12 @@ import {
   getPRDiffStat,
   commentOnPR,
   resolvePRHeadBranchCwd,
-} from "../git.js";
+} from "../git.ts";
 import {
   beginPullRequestRun,
   isSupersededPullRequestRun,
   pullRequestRunKindLabel,
-} from "../pr-run-controller.js";
+} from "../pr-run-controller.ts";
 
 interface CodeReviewInput {
   project: string;
@@ -247,7 +248,7 @@ For each finding:
 
 If the diff is clean, write one sentence saying so. Do not pad.`;
 
-export async function codeReview(input: CodeReviewInput, _signal?: AbortSignal) {
+export async function codeReview(input: CodeReviewInput, controller: AbortController) {
   if (!input.project) throw new Error("Missing required field: project");
   if (!input.pr) throw new Error("Missing required field: pr");
 
@@ -256,10 +257,10 @@ export async function codeReview(input: CodeReviewInput, _signal?: AbortSignal) 
     kind: "code-review",
     project,
     pr: input.pr,
-    requestSignal: _signal,
+    controller,
   });
 
-  console.log(`[codeReview] reviewing PR ${input.pr} in ${project}`);
+  console.log(`[codeReview] request started: reviewing PR ${input.pr} in ${project}`);
 
   let cleanupPRHeadBranchCwd: () => Promise<void> = async () => { };
 
@@ -284,13 +285,9 @@ export async function codeReview(input: CodeReviewInput, _signal?: AbortSignal) 
     throwIfCancelled();
 
     if (!diff) {
-      console.log(`[codeReview] PR #${prInfo.number} has no changes — skipping`);
+      console.log(`[codeReview] request succeeded: PR #${prInfo.number} has no changes; skipping`);
       return { result: "No changes found in PR", prUrl: prInfo.url };
     }
-
-    console.log(
-      `[codeReview] PR #${prInfo.number} "${prInfo.title}" (${prInfo.headBranch} → ${prInfo.baseBranch})`,
-    );
 
     const initialBranch = await getCurrentBranch(project);
     const prHeadBranchContext = await resolvePRHeadBranchCwd({
@@ -300,7 +297,6 @@ export async function codeReview(input: CodeReviewInput, _signal?: AbortSignal) 
     });
     cleanupPRHeadBranchCwd = prHeadBranchContext.cleanup;
     const { prHeadBranchCwd } = prHeadBranchContext;
-    console.log(`[codeReview] using PR head branch cwd: ${prHeadBranchCwd}`);
     throwIfCancelled();
 
     const focus = input.focus ? `\nFocus area: ${input.focus}` : "";
@@ -332,28 +328,29 @@ ${diff}
     });
     throwIfCancelled();
 
-    console.log(`[codeReview] reviewer agent result:\n${result}`);
+    logModel("codeReview", defaults.provider, `reviewer agent result:\n${result}`);
 
     await commentOnPR(project, input.pr, result).catch((commentErr) =>
       console.error(`[codeReview] failed to post review comment:`, commentErr),
     );
 
+    console.log(`[codeReview] request succeeded: reviewed PR #${prInfo.number}`);
     return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, model, totalTokens, usage, totalCostUsd };
   } catch (err) {
     if (isSupersededPullRequestRun(run.signal)) {
-      console.log(`[codeReview] PR ${input.pr} review stopped for a newer request`);
+      console.log(`[codeReview] request stopped: PR ${input.pr} review superseded by a newer request`);
       return {
         result: "Automated review stopped because a newer review was requested for this PR.",
         stopped: true,
       };
     }
     if (run.signal.aborted) {
-      console.log(`[codeReview] PR ${input.pr} review cancelled`);
+      console.log(`[codeReview] request cancelled: PR ${input.pr} review cancelled`);
       throw err;
     }
 
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[codeReview] review failed:`, err);
+    console.error(`[codeReview] request failed:`, err);
 
     const errorComment = `## ⚠️ Code review failed
 

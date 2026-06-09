@@ -13,7 +13,7 @@ Use your Claude or Codex subscription plan through an HTTP wrapper to run autono
 
 ## Prompt
 
-Given your prompt, project, and origin branch, it creates a worktree, applies changes, and opens a draft PR.
+Given your prompt, project, and origin branch, it creates a worktree, chosen harness runs and applies changes then a draft PR is opened with them
 
 ## Code review
 
@@ -83,16 +83,27 @@ request:
 response:
 ```json
 {
-  "result": "## ",
+  "result": "## Automated QA complete\n\nTested the README change and confirmed the application still starts successfully. No issues found.",
   "sessionId": "7207f92b-d5a3-4162-949c-90a25d26e737",
   "prUrl": "https://github.com/max-d3v/orion-kit/pull/2",
-  "prNumber": 2
+  "prNumber": 2,
+  "model": "claude-opus-4-6",
+  "usage": {
+    "input_tokens": 15210,
+    "output_tokens": 2310,
+    "cache_creation_input_tokens": 900,
+    "cache_read_input_tokens": 0
+  },
+  "totalTokens": 18420,
+  "totalCostUsd": 0.42
 }
 ```
 
 # Defaults and more details
 
 Claude Code is the default CLI. Pass `"cli": "codex"` (or `"provider": "codex"`) to use `codex exec` instead. Mode calls resolve `model` and `effort` from `provider_defaults` in `src/config.ts` unless the request overrides them.
+
+Provider runs print streamed model actions to the server terminal when `show_model_actions` is enabled in `src/config.ts`. Turn it off there to keep only request start, success, cancellation, and error logs.
 
 If a provider or mode has no configured defaults, requests must pass the missing values explicitly or the API will throw.
 

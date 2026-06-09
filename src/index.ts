@@ -1,12 +1,27 @@
 import express from "express";
 import type { Request, Response } from "express";
-import { queryAgent, type AgentOptions } from "./agent.js";
-import { MODES } from "./modes/index.js";
+import { queryAgent, type AgentOptions } from "./agent.ts";
+import { MODES } from "./modes/index.ts";
+import { logRequestError, logRequestStart, logRequestSuccess } from "./logging.ts";
 
 const app = express();
 app.use(express.json());
 
 const PORT = Number(process.env.PORT) || 3000;
+
+function abortOnCancelledRequest(req: Request, res: Response, controller: AbortController): void {
+  const reason = new Error("Request cancelled by client");
+  const abort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(reason);
+    }
+  };
+
+  req.once("aborted", abort);
+  res.once("close", () => {
+    if (!res.writableFinished) abort();
+  });
+}
 
 app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", runtime: "bun", functions: Object.keys(MODES) });
@@ -28,12 +43,18 @@ app.post("/prompt", async (req: Request, res: Response) => {
   }
 
   const ac = new AbortController();
-  res.on("close", () => {
-    if (!res.writableFinished) ac.abort();
-  });
+  abortOnCancelledRequest(req, res, ac);
+  logRequestStart(
+    "POST /prompt",
+    `provider=${body.cli ?? body.provider ?? "claude"} project=${body.project} originBranch=${body.originBranch}`,
+  );
 
   try {
     const result = await queryAgent({ ...body, abortController: ac });
+    logRequestSuccess(
+      "POST /prompt",
+      `branch=${result.branch ?? "(none)"} prUrl=${result.prUrl ?? "(skipped)"}`,
+    );
     res.json(result);
   } catch (err: any) {
     if (ac.signal.aborted) {
@@ -41,33 +62,34 @@ app.post("/prompt", async (req: Request, res: Response) => {
       if (!res.headersSent) res.status(499).json({ error: "Request cancelled" });
       return;
     }
-    console.error("[POST /prompt]", err);
+    logRequestError("POST /prompt", err);
     res.status(500).json({ error: err.message ?? "Internal server error" });
   }
 });
 
 app.post("/mode/:name", async (req: Request, res: Response) => {
-  const fn = MODES[req.params.name as keyof typeof MODES];
+  const modeName = req.params.name;
+  const fn = MODES[modeName as keyof typeof MODES];
   if (!fn) {
-    res.status(404).json({ error: `Unknown function: ${req.params.name}` });
+    res.status(404).json({ error: `Unknown function: ${modeName}` });
     return;
   }
 
   const ac = new AbortController();
-  res.on("close", () => {
-    if (!res.writableFinished) ac.abort();
-  });
+  abortOnCancelledRequest(req, res, ac);
+  logRequestStart(`POST /mode/${modeName}`);
 
   try {
-    const result = await fn(req.body, ac.signal);
+    const result = await fn(req.body, ac);
+    logRequestSuccess(`POST /mode/${modeName}`);
     res.json(result);
   } catch (err: any) {
     if (ac.signal.aborted) {
-      console.log(`[POST /mode/${req.params.name}] Request cancelled`);
+      console.log(`[POST /mode/${modeName}] Request cancelled`);
       if (!res.headersSent) res.status(499).json({ error: "Request cancelled" });
       return;
     }
-    console.error(`[POST /mode/${req.params.name}]`, err);
+    logRequestError(`POST /mode/${modeName}`, err);
     res.status(500).json({ error: err.message ?? "Internal server error" });
   }
 });

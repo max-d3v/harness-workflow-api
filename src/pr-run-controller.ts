@@ -45,7 +45,7 @@ export function beginPullRequestRun(input: {
   kind: PullRequestRunKind;
   project: string;
   pr: string | number;
-  requestSignal?: AbortSignal;
+  controller: AbortController;
 }): PullRequestRun {
   const key = runKey(input.project, input.pr);
   const startedAt = new Date();
@@ -60,21 +60,9 @@ export function beginPullRequestRun(input: {
     );
   }
 
-  const controller = new AbortController();
+  const { controller } = input;
   const token = Symbol(key);
   const active: ActivePullRequestRun = { controller, kind: input.kind, token, startedAt };
-
-  const abortFromRequest = () =>
-    abortRequest(
-      controller,
-      input.requestSignal?.reason ?? new Error("Request cancelled by client"),
-    );
-
-  if (input.requestSignal?.aborted) {
-    abortFromRequest();
-  } else {
-    input.requestSignal?.addEventListener("abort", abortFromRequest, { once: true });
-  }
 
   activePullRequestRuns.set(key, active);
 
@@ -85,7 +73,6 @@ export function beginPullRequestRun(input: {
     replacedKind,
     startedAt,
     finish: () => {
-      input.requestSignal?.removeEventListener("abort", abortFromRequest);
       if (activePullRequestRuns.get(key)?.token === token) {
         activePullRequestRuns.delete(key);
       }

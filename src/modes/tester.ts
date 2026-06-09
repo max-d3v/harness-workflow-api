@@ -1,5 +1,6 @@
-import { queryAgentReadOnly, queryAgentTask, resolvePath, type AgentCli, type AgentOptions } from "../agent.js";
-import { resolveProviderDefaults } from "../config.js";
+import { queryAgentReadOnly, queryAgentTask, resolvePath, type AgentCli, type AgentOptions } from "../agent.ts";
+import { resolveProviderDefaults } from "../config.ts";
+import { logModel } from "../logging.ts";
 import {
   getCurrentBranch,
   getPRInfo,
@@ -7,17 +8,17 @@ import {
   getPRDiffStat,
   commentOnPR,
   resolvePRHeadBranchCwd,
-} from "../git.js";
+} from "../git.ts";
 import {
   beginPullRequestRun,
   isSupersededPullRequestRun,
   pullRequestRunKindLabel,
-} from "../pr-run-controller.js";
+} from "../pr-run-controller.ts";
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import { promisify } from "node:util";
 import treeKill from "tree-kill";
 import { $ } from "bun";
-import { imageServer } from "../tools/screenshot-upload.js";
+import { imageServer } from "../tools/screenshot-upload.ts";
 
 const githubEnv = process.env.MAX_TRAZO_GITHUB_TOKEN
 if (!githubEnv) throw Error("No github token provided.")
@@ -171,7 +172,7 @@ ${diffStat}
     abortController: opts.abortController,
   });
 
-  console.log(`[codeTest] dev-server agent result:\n${result}`);
+  logModel("codeTest:dev-server", defaults.provider, `dev-server agent result:\n${result}`);
 
   let parsed: { url: string | null; pids?: number[]; port?: number };
   try {
@@ -214,7 +215,7 @@ async function killDevServer(server: DevServer): Promise<void> {
   for (const pid of targets) await killTree(pid, "SIGKILL").catch(() => { });
 }
 
-export async function codeTest(input: CodeTestInput, _signal?: AbortSignal) {
+export async function codeTest(input: CodeTestInput, controller: AbortController) {
   if (!input.project) throw new Error("Missing required field: project");
   if (!input.pr) throw new Error("Missing required field: pr");
 
@@ -223,8 +224,9 @@ export async function codeTest(input: CodeTestInput, _signal?: AbortSignal) {
     kind: "code-test",
     project,
     pr: input.pr,
-    requestSignal: _signal,
+    controller,
   });
+  console.log(`[codeTest] request started: testing PR ${input.pr} in ${project}`);
 
   let server: DevServer | null = null;
   let cleanupPRHeadBranchCwd: () => Promise<void> = async () => {};
@@ -251,6 +253,7 @@ export async function codeTest(input: CodeTestInput, _signal?: AbortSignal) {
     throwIfCancelled();
 
     if (!diff) {
+      console.log(`[codeTest] request succeeded: PR #${prInfo.number} has no changes; skipping`);
       return { result: "No changes found in PR", prUrl: prInfo.url };
     }
 
@@ -262,7 +265,6 @@ export async function codeTest(input: CodeTestInput, _signal?: AbortSignal) {
     });
     cleanupPRHeadBranchCwd = prHeadBranchContext.cleanup;
     const { prHeadBranchCwd } = prHeadBranchContext;
-    console.log(`[codeTest] using PR head branch cwd: ${prHeadBranchCwd}`);
     throwIfCancelled();
 
     let testUrl: string;
@@ -295,11 +297,6 @@ ${diff}
 
 `;
     const defaults = resolveProviderDefaults("qa", input);
-    if (defaults.provider === "codex") {
-      console.warn(
-        "[codeTest] Codex SDK does not receive this mode's per-run MCP server config; it will use the local Codex configuration.",
-      );
-    }
     const { result, sessionId, model, totalTokens, usage, totalCostUsd } = await queryAgentReadOnly({
       prompt,
       project: prHeadBranchCwd,
@@ -318,7 +315,7 @@ ${diff}
     });
     throwIfCancelled();
 
-    console.log(`[codeTest] tester agent result:\n${result}`);
+    logModel("codeTest:tester", defaults.provider, `tester agent result:\n${result}`);
 
     await commentOnPR(
       project,
@@ -328,22 +325,23 @@ ${diff}
       console.error(`[codeTest] failed to post completion comment:`, commentErr),
     );
 
+    console.log(`[codeTest] request succeeded: tested PR #${prInfo.number}`);
     return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, model, totalTokens, usage, totalCostUsd };
   } catch (err) {
     if (isSupersededPullRequestRun(run.signal)) {
-      console.log(`[codeTest] PR ${input.pr} QA stopped for a newer request`);
+      console.log(`[codeTest] request stopped: PR ${input.pr} QA superseded by a newer request`);
       return {
         result: "Automated QA stopped because a newer QA run was requested for this PR.",
         stopped: true,
       };
     }
     if (run.signal.aborted) {
-      console.log(`[codeTest] PR ${input.pr} QA cancelled`);
+      console.log(`[codeTest] request cancelled: PR ${input.pr} QA cancelled`);
       throw err;
     }
 
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
-    console.error(`[codeTest] tester agent threw:\n${message}`);
+    console.error(`[codeTest] request failed:\n${message}`);
     await commentOnPR(
       project,
       input.pr,
@@ -353,7 +351,6 @@ ${diff}
     );
     throw err;
   } finally {
-    console.log("KILLING DEV SERVER", server)
     if (server) await killDevServer(server);
     await cleanupPRHeadBranchCwd().catch((cleanupErr) =>
       console.error(`[codeTest] failed to clean up PR head branch worktree:`, cleanupErr),

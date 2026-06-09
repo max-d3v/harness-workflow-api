@@ -2,6 +2,7 @@ import { $ } from "bun";
 import { randomBytes } from "crypto";
 import path from "path";
 import { realpath, rm, stat } from "fs/promises";
+import { log } from "./logging.ts";
 
 export interface WorktreeContext {
   worktreePath: string;
@@ -280,4 +281,5 @@ export async function getPRDiffStat(project: string, pr: string | number): Promi
 
 export async function commentOnPR(project: string, pr: string | number, body: string): Promise<void> {
   await $`gh pr review ${pr} --comment --body ${body}`.cwd(project).quiet();
+  log("github", `PR comment posted: pr=${pr} chars=${body.length}`);
 }
