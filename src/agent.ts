@@ -2,6 +2,7 @@ import { createWorktree, commitAndPush, openPR } from "./git.ts";
 import { homedir } from "os";
 import path from "path";
 import { resolveProviderDefaults } from "./config.ts";
+import { log } from "./logging.ts";
 import { collectAgent } from "./providers/index.ts";
 import type { AgentOptions, AgentResult, AgentRunResult } from "./agent-types.ts";
 
@@ -47,7 +48,7 @@ export async function queryAgent(opts: AgentOptions): Promise<AgentResult> {
       try {
         prUrl = await openPR(ctx, title, result.slice(0, 4000));
       } catch (err) {
-        console.error("[openPR] Failed to create PR:", err);
+        log("openPR", "failed to create PR:", err);
       }
     }
 

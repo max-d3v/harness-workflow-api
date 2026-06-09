@@ -1,6 +1,6 @@
 import { queryAgentReadOnly, resolvePath, type AgentCli, type AgentOptions } from "../agent.ts";
 import { resolveProviderDefaults } from "../config.ts";
-import { logModel } from "../logging.ts";
+import { log, logModel } from "../logging.ts";
 import {
   getCurrentBranch,
   getPRInfo,
@@ -260,7 +260,7 @@ export async function codeReview(input: CodeReviewInput, controller: AbortContro
     controller,
   });
 
-  console.log(`[codeReview] request started: reviewing PR ${input.pr} in ${project}`);
+  log("codeReview", `request started: reviewing PR ${input.pr} in ${project}`);
 
   let cleanupPRHeadBranchCwd: () => Promise<void> = async () => { };
 
@@ -285,7 +285,7 @@ export async function codeReview(input: CodeReviewInput, controller: AbortContro
     throwIfCancelled();
 
     if (!diff) {
-      console.log(`[codeReview] request succeeded: PR #${prInfo.number} has no changes; skipping`);
+      log("codeReview", `request succeeded: PR #${prInfo.number} has no changes; skipping`);
       return { result: "No changes found in PR", prUrl: prInfo.url };
     }
 
@@ -331,26 +331,26 @@ ${diff}
     logModel("codeReview", defaults.provider, `reviewer agent result:\n${result}`);
 
     await commentOnPR(project, input.pr, result).catch((commentErr) =>
-      console.error(`[codeReview] failed to post review comment:`, commentErr),
+      log("codeReview", "failed to post review comment:", commentErr),
     );
 
-    console.log(`[codeReview] request succeeded: reviewed PR #${prInfo.number}`);
+    log("codeReview", `request succeeded: reviewed PR #${prInfo.number}`);
     return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, model, totalTokens, usage, totalCostUsd };
   } catch (err) {
     if (isSupersededPullRequestRun(run.signal)) {
-      console.log(`[codeReview] request stopped: PR ${input.pr} review superseded by a newer request`);
+      log("codeReview", `request stopped: PR ${input.pr} review superseded by a newer request`);
       return {
         result: "Automated review stopped because a newer review was requested for this PR.",
         stopped: true,
       };
     }
     if (run.signal.aborted) {
-      console.log(`[codeReview] request cancelled: PR ${input.pr} review cancelled`);
+      log("codeReview", `request cancelled: PR ${input.pr} review cancelled`);
       throw err;
     }
 
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[codeReview] request failed:`, err);
+    log("codeReview", "request failed:", err);
 
     const errorComment = `## ⚠️ Code review failed
 
@@ -361,13 +361,13 @@ ${message}
 \`\`\``;
 
     await commentOnPR(project, input.pr, errorComment).catch((commentErr) =>
-      console.error(`[codeReview] failed to post error comment:`, commentErr),
+      log("codeReview", "failed to post error comment:", commentErr),
     );
 
     throw err;
   } finally {
     await cleanupPRHeadBranchCwd().catch((cleanupErr) =>
-      console.error(`[codeReview] failed to clean up PR head branch worktree:`, cleanupErr),
+      log("codeReview", "failed to clean up PR head branch worktree:", cleanupErr),
     );
     run.finish();
   }

@@ -58,7 +58,7 @@ app.post("/prompt", async (req: Request, res: Response) => {
     res.json(result);
   } catch (err: any) {
     if (ac.signal.aborted) {
-      console.log("[POST /prompt] Request cancelled");
+      log("POST /prompt", "request cancelled");
       if (!res.headersSent) res.status(499).json({ error: "Request cancelled" });
       return;
     }
@@ -85,7 +85,7 @@ app.post("/mode/:name", async (req: Request, res: Response) => {
     res.json(result);
   } catch (err: any) {
     if (ac.signal.aborted) {
-      console.log(`[POST /mode/${modeName}] Request cancelled`);
+      log(`POST /mode/${modeName}`, "request cancelled");
       if (!res.headersSent) res.status(499).json({ error: "Request cancelled" });
       return;
     }

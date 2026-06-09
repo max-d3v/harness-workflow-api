@@ -1,6 +1,6 @@
 import { queryAgentReadOnly, queryAgentTask, resolvePath, type AgentCli, type AgentOptions } from "../agent.ts";
 import { resolveProviderDefaults } from "../config.ts";
-import { logModel } from "../logging.ts";
+import { log, logModel } from "../logging.ts";
 import {
   getCurrentBranch,
   getPRInfo,
@@ -206,7 +206,7 @@ async function killDevServer(server: DevServer): Promise<void> {
     } catch { }
   }
   if (targets.size === 0) {
-    console.error("[codeTest] No PID or port to stop the dev server with");
+    log("codeTest", "No PID or port to stop the dev server with");
     return;
   }
 
@@ -226,7 +226,7 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
     pr: input.pr,
     controller,
   });
-  console.log(`[codeTest] request started: testing PR ${input.pr} in ${project}`);
+  log("codeTest", `request started: testing PR ${input.pr} in ${project}`);
 
   let server: DevServer | null = null;
   let cleanupPRHeadBranchCwd: () => Promise<void> = async () => {};
@@ -241,7 +241,7 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
       ? `♻️ **Previous QA Run stopped.**\n\nA newer automated QA run was requested for this PR, so the older run was cancelled and this new QA run is starting now.`
       : `🧪 **Automated QA started.**`;
     await commentOnPR(project, input.pr, startComment).catch((commentErr) =>
-      console.error(`[codeTest] failed to post start comment:`, commentErr),
+      log("codeTest", "failed to post start comment:", commentErr),
     );
     throwIfCancelled();
 
@@ -253,7 +253,7 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
     throwIfCancelled();
 
     if (!diff) {
-      console.log(`[codeTest] request succeeded: PR #${prInfo.number} has no changes; skipping`);
+      log("codeTest", `request succeeded: PR #${prInfo.number} has no changes; skipping`);
       return { result: "No changes found in PR", prUrl: prInfo.url };
     }
 
@@ -322,38 +322,38 @@ ${diff}
       input.pr,
       `🏁 **Automated testing finished.**\n\nThe tester agent has completed exercising this PR. Individual findings are posted as separate comments above.`,
     ).catch((commentErr) =>
-      console.error(`[codeTest] failed to post completion comment:`, commentErr),
+      log("codeTest", "failed to post completion comment:", commentErr),
     );
 
-    console.log(`[codeTest] request succeeded: tested PR #${prInfo.number}`);
+    log("codeTest", `request succeeded: tested PR #${prInfo.number}`);
     return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, model, totalTokens, usage, totalCostUsd };
   } catch (err) {
     if (isSupersededPullRequestRun(run.signal)) {
-      console.log(`[codeTest] request stopped: PR ${input.pr} QA superseded by a newer request`);
+      log("codeTest", `request stopped: PR ${input.pr} QA superseded by a newer request`);
       return {
         result: "Automated QA stopped because a newer QA run was requested for this PR.",
         stopped: true,
       };
     }
     if (run.signal.aborted) {
-      console.log(`[codeTest] request cancelled: PR ${input.pr} QA cancelled`);
+      log("codeTest", `request cancelled: PR ${input.pr} QA cancelled`);
       throw err;
     }
 
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
-    console.error(`[codeTest] request failed:\n${message}`);
+    log("codeTest", `request failed:\n${message}`);
     await commentOnPR(
       project,
       input.pr,
       `⚠️ **Automated testing failed to complete.**\n\nThe tester agent threw before it could finish exercising this PR, so the findings above (if any) may be incomplete.\n\n\`\`\`\n${message}\n\`\`\``,
     ).catch((commentErr) =>
-      console.error(`[codeTest] failed to post error comment:`, commentErr),
+      log("codeTest", "failed to post error comment:", commentErr),
     );
     throw err;
   } finally {
     if (server) await killDevServer(server);
     await cleanupPRHeadBranchCwd().catch((cleanupErr) =>
-      console.error(`[codeTest] failed to clean up PR head branch worktree:`, cleanupErr),
+      log("codeTest", "failed to clean up PR head branch worktree:", cleanupErr),
     );
     run.finish();
   }

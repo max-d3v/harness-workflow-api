@@ -1,5 +1,6 @@
 import { collectClaudeSdk } from "./claude.ts";
 import { collectCodexSdk } from "./codex.ts";
+import { log } from "../logging.ts";
 import type { AgentCli, AgentOptions, AgentRunResult } from "../agent-types.ts";
 
 export function resolveAgentCli(opts: Pick<AgentOptions, "cli" | "provider">): AgentCli {
@@ -10,8 +11,9 @@ export async function collectAgent(opts: AgentOptions, cwd: string): Promise<Age
   switch (resolveAgentCli(opts)) {
     case "codex":
       if (opts.mcpServers) {
-        console.warn(
-          "[agent] request warning: Codex SDK does not receive per-run MCP server config; using local Codex configuration.",
+        log(
+          "agent",
+          "request warning: Codex SDK does not receive per-run MCP server config; using local Codex configuration.",
         );
       }
       return collectCodexSdk(opts, cwd);
