@@ -1,6 +1,6 @@
 # Coding Harness API 🦹
 
-Use your Claude or Codex subscription plan through an HTTP wrapper to create autonomous coding agents and automations (code reviews, QA agents) for one-fifth of the price.
+Use your Claude or Codex subscription plan through an HTTP wrapper to run autonomous coding agents and automations (code reviews, QA agents) for one-fifth of the price.
 
 # Prerequisites
 
