@@ -86,7 +86,7 @@ Your scope is the diff. Before touching the browser, read the
 full diff and list (for yourself) the concrete user-facing behaviors it changes:
 the specific screens, forms, flows, or data the changed lines actually run in.
 
-Use the Playwright browser tools to exercise those behaviors:
+Use your browser tools to exercise those behaviors:
 - Test the exact behavior the diff introduces or changes, via the real UI path
   that hits the changed code.
 - Test a regression ONLY when you can trace a direct code path from the diff to
