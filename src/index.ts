@@ -2,7 +2,7 @@ import express from "express";
 import type { Request, Response } from "express";
 import { queryAgent, type AgentOptions } from "./agent.ts";
 import { MODES } from "./modes/index.ts";
-import { logRequestError, logRequestStart, logRequestSuccess } from "./logging.ts";
+import { log } from "./logging.ts";
 
 const app = express();
 app.use(express.json());
@@ -44,16 +44,16 @@ app.post("/prompt", async (req: Request, res: Response) => {
 
   const ac = new AbortController();
   abortOnCancelledRequest(req, res, ac);
-  logRequestStart(
+  log(
     "POST /prompt",
-    `provider=${body.cli ?? body.provider ?? "claude"} project=${body.project} originBranch=${body.originBranch}`,
+    `request started: provider=${body.cli ?? body.provider ?? "claude"} project=${body.project} originBranch=${body.originBranch}`,
   );
 
   try {
     const result = await queryAgent({ ...body, abortController: ac });
-    logRequestSuccess(
+    log(
       "POST /prompt",
-      `branch=${result.branch ?? "(none)"} prUrl=${result.prUrl ?? "(skipped)"}`,
+      `request succeeded: branch=${result.branch ?? "(none)"} prUrl=${result.prUrl ?? "(skipped)"}`,
     );
     res.json(result);
   } catch (err: any) {
@@ -62,7 +62,7 @@ app.post("/prompt", async (req: Request, res: Response) => {
       if (!res.headersSent) res.status(499).json({ error: "Request cancelled" });
       return;
     }
-    logRequestError("POST /prompt", err);
+    log("POST /prompt", "request failed:", err);
     res.status(500).json({ error: err.message ?? "Internal server error" });
   }
 });
@@ -77,11 +77,11 @@ app.post("/mode/:name", async (req: Request, res: Response) => {
 
   const ac = new AbortController();
   abortOnCancelledRequest(req, res, ac);
-  logRequestStart(`POST /mode/${modeName}`);
+  log(`POST /mode/${modeName}`, "request started");
 
   try {
     const result = await fn(req.body, ac);
-    logRequestSuccess(`POST /mode/${modeName}`);
+    log(`POST /mode/${modeName}`, "request succeeded");
     res.json(result);
   } catch (err: any) {
     if (ac.signal.aborted) {
@@ -89,7 +89,7 @@ app.post("/mode/:name", async (req: Request, res: Response) => {
       if (!res.headersSent) res.status(499).json({ error: "Request cancelled" });
       return;
     }
-    logRequestError(`POST /mode/${modeName}`, err);
+    log(`POST /mode/${modeName}`, "request failed:", err);
     res.status(500).json({ error: err.message ?? "Internal server error" });
   }
 });
