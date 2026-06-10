@@ -8,6 +8,20 @@ Use your Claude or Codex subscription plan through an HTTP wrapper to run autono
 - Either a logged-in Claude CLI or a logged-in Codex CLI
 - A logged-in GitHub CLI
 - [Gitshot](https://github.com/vipulgupta2048/gitshot), via `npx`, for uploading QA screenshots to a dedicated image repo on the logged-in GitHub account so they can be embedded in PR comments
+- `CLAUDE_HARNESS_API_TOKEN` set in `.env`
+
+# Auth
+
+Protected endpoints require a bearer token:
+
+```bash
+curl -X POST "http://localhost:3000/mode/code-review" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $CLAUDE_HARNESS_API_TOKEN" \
+  -d '{"pr":2,"project":"code/nextjs-boilerplate"}'
+```
+
+`GET /health` is public so health checks can run without a token. All other endpoints return `401 Unauthorized` when the token is missing or invalid. If `CLAUDE_HARNESS_API_TOKEN` is not set on the server, protected endpoints return `500` until it is configured.
 
 # Modes
 

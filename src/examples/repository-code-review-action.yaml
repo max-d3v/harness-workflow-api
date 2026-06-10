@@ -13,8 +13,10 @@ jobs:
         env:
           PROJECT_LOCAL_PATH: ${{ vars.project_local_path }}
           CLAUDE_HARNESS_API_URL: ${{ vars.claude_harness_api_url }}
+          CODING_HARNESS_API_TOKEN: ${{ secrets.coding_harness_api_token }}
         run: |
           curl -X POST "${CLAUDE_HARNESS_API_URL}/mode/code-review" \
             -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${CODING_HARNESS_API_TOKEN}" \
             -d "{\"pr\": \"${{ github.event.pull_request.number }}\", \"project\": \"${PROJECT_LOCAL_PATH}\", \"provider\": \"codex\"}" \
             --fail --silent --show-error

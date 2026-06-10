@@ -1,5 +1,6 @@
 import express from "express";
 import type { Request, Response } from "express";
+import { requireTokenAuth } from "./auth.ts";
 import { queryAgent, type AgentOptions } from "./agent.ts";
 import { MODES } from "./modes/index.ts";
 import { log } from "./logging.ts";
@@ -26,6 +27,8 @@ function abortOnCancelledRequest(req: Request, res: Response, controller: AbortC
 app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", runtime: "bun", functions: Object.keys(MODES) });
 });
+
+app.use(requireTokenAuth);
 
 app.post("/prompt", async (req: Request, res: Response) => {
   const body = req.body as AgentOptions;
@@ -97,7 +100,7 @@ app.post("/mode/:name", async (req: Request, res: Response) => {
 app.listen(PORT, () => {
   console.log(`
   Claude Harness API — http://localhost:${PORT}
-  Auth: Claude CLI OAuth or Codex CLI | Runtime: Bun ${Bun.version}
+  Auth: Bearer token + Claude CLI OAuth or Codex CLI | Runtime: Bun ${Bun.version}
 
   POST /prompt       Run agent in worktree → commit → push → PR
   POST /mode/:name   Specific mode (${Object.keys(MODES).join(", ")})

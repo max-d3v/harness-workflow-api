@@ -279,7 +279,18 @@ export async function getPRDiffStat(project: string, pr: string | number): Promi
   return stat.trim();
 }
 
-export async function commentOnPR(project: string, pr: string | number, body: string): Promise<void> {
-  await $`gh pr review ${pr} --comment --body ${body}`.cwd(project).quiet();
-  log("github", `PR comment posted: pr=${pr} chars=${body.length}`);
+export type PullRequestReviewAction = "comment" | "request_changes";
+
+export async function commentOnPR(
+  project: string,
+  pr: string | number,
+  body: string,
+  action: PullRequestReviewAction = "comment",
+): Promise<void> {
+  if (action === "request_changes") {
+    await $`gh pr review ${pr} --request-changes --body ${body}`.cwd(project).quiet();
+  } else {
+    await $`gh pr review ${pr} --comment --body ${body}`.cwd(project).quiet();
+  }
+  log("github", `PR review posted: pr=${pr} action=${action} chars=${body.length}`);
 }

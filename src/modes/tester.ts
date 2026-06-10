@@ -20,7 +20,7 @@ import treeKill from "tree-kill";
 import { $ } from "bun";
 import { imageServer } from "../tools/screenshot-upload.ts";
 
-const githubEnv = process.env.MAX_TRAZO_GITHUB_TOKEN
+const githubEnv = process.env.GITHUB_TOKEN
 if (!githubEnv) throw Error("No github token provided.")
 
 interface CodeTestInput {
