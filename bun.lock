@@ -10,6 +10,7 @@
         "@openai/codex-sdk": "0.137.0",
         "express": "^5.2.1",
         "tree-kill": "^1.2.2",
+        "zod": "^4.3.6",
       },
       "devDependencies": {
         "@types/bun": "latest",

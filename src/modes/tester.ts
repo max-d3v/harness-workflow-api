@@ -16,11 +16,12 @@ import {
 } from "../pr-run-controller.ts";
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import { promisify } from "node:util";
+import { spawn } from "node:child_process";
+import { z } from "zod";
 import treeKill from "tree-kill";
-import { $ } from "bun";
 import { imageServer } from "../tools/screenshot-upload.ts";
 
-const githubEnv = process.env.GITHUB_TOKEN;
+const githubEnv = process.env.GITHUB_TOKEN_USER;
 
 interface CodeTestInput {
   // Repo path (worktree or local checkout). Required: the PR diff/comment
@@ -61,34 +62,12 @@ function buildMcpServers(): Record<string, McpServerConfig> {
 const MCP_TOOLS_ALLOWED = ["mcp__playwright", "mcp__imageUploader", "mcp__github__add_issue_comment"];
 
 const SERVER_INITIATOR_SYSTEM_PROMPT = `
-You start a project's dev server so another agent can drive it in a browser.
+You identify the exact dev-server command(s) this harness should execute so another agent can drive the app in a browser.
 You will receive the diff stat (list of changed files) from the PR under test.
 Use it to detect which apps or services are needed to run to test the affected changes.
 Be aware for apps that need multiple things to run, like a db + app. so always check root dev commands first.
 
-
-Steps:
-1. Read the diff stat to determine which part of the project changed.
-2. Detect the package manager (bun.lockb→bun, pnpm-lock.yaml→pnpm, yarn.lock→yarn, else npm) and install dependencies.
-3. Find the right dev script.
-4. Start everything DETACHED so it survives after you exit:
-   nohup <pkgmgr> run dev > /tmp/devserver.log 2>&1 & echo $!
-   then run \`disown\`.
-5. Poll /tmp/devserver.log until the server prints a local URL and is reachable (curl -sf). Give up after ~30s.
-
-Output ONLY a final fenced json block, nothing after it:
-\`\`\`json
-{ "url": "http://localhost:3000", "pids": [12345], "port": 3000 }
-\`\`\`
-"pids" = every PID in the server's process tree you can identify. If the server will not come up, set "url" to null and explain briefly before the json block.`;
-
-
-const SERVER_INITIATOR_SYSTEM_PROMPT_CODEX = `
-You start the minimum necessary dev server(s) for a project so another agent can drive the app in a browser.
-
-You will receive a PR diff stat. Use it to decide which app(s) or services are affected.
-
-General rules:
+Rules:
 - Prefer existing project instructions in README or package scripts.
 - In monorepos, prefer a root script that starts the affected app and required local services together.
 - If a root script named dev:app, dev:web, dev:local, app:dev, start:app, or similar clearly targets the affected app, use that instead of plain dev.
@@ -100,29 +79,25 @@ General rules:
   yarn.lock -> yarn
   package-lock.json -> npm
   otherwise npm
-- Install dependencies only if node_modules is missing or the package manager clearly requires it.
-- Do not rerun the chosen command in foreground.
+- Do not include dependency install commands.
+- Do not run commands, install dependencies, open ports, curl URLs, or start a server yourself. Your only job is to return the command plan.
+- Use shell command strings exactly as they should be executed by \`sh -lc\`.
+- Set \`url\` to the expected local app URL. Set \`port\` too when it is knowable from scripts, config, docs, or framework defaults.
+- Commands always run from the repository cwd provided in the request. Do not include cwd or env fields.
 
-
-Steps:
-1. Read the diff stat and inspect package.json files plus project docs to choose the right dev command.
-2. Determine the working directory for the command. Prefer repo root for monorepo root scripts.
-3. Start the command detached so it survives after you exit.
-   Use a unique log path, e.g. /tmp/devserver-$RANDOM.log.
-   Prefer:
-   nohup sh -lc '<COMMAND>' > "$LOG" 2>&1 & echo $!
-   Then run:
-   disown || true
-4. Poll the log for a local URL such as http://localhost:<port> or http://127.0.0.1:<port>.
-5. If no URL is printed, infer likely ports from the command/framework/config, then try common ports: 3000, 3001, 5173, 4173, 8080, 8000.
-6. Use curl -sf against the discovered URL until it responds or until about 30 seconds have passed.
-7. Identify the root PID and any child PIDs you can find with pgrep -P recursively.
-
-Output ONLY a final fenced json block, nothing after it:
+Output ONLY a final fenced json block, nothing before or after it:
 \`\`\`json
-{ "url": "http://localhost:3000", "pids": [12345], "port": 3000 }
+{
+  "commands": [
+    { "name": "web", "command": "pnpm dev --filter web" }
+  ],
+  "url": "http://localhost:3000",
+  "port": 3000
+}
 \`\`\`
-"pids" = every PID in the server's process tree you can identify. If the server will not come up, set "url" to null and explain briefly before the json block.`;
+"commands" should contain only long-running processes that should be killed after testing.`;
+
+
 
 
 const TESTER_SYSTEM_PROMPT = `
@@ -182,6 +157,17 @@ interface DevServer {
   port?: number;
 }
 
+const devServerCommandPlanSchema = z.object({
+  commands: z.array(z.object({
+    name: z.string().optional(),
+    command: z.string().trim().min(1),
+  }).strict()).nonempty(),
+  url: z.string().trim().min(1),
+  port: z.number().int().positive().max(65535).optional(),
+}).strict();
+
+type DevServerCommandPlan = z.infer<typeof devServerCommandPlanSchema>;
+
 function parseJsonBlock(text: string): any {
   const fenced = text.match(/```json\s*([\s\S]*?)```/i);
   const candidate = fenced?.[1] ?? text.slice(text.lastIndexOf("{"));
@@ -200,7 +186,7 @@ async function startDevServer(
     model: opts.serverModel,
   });
   const { result } = await queryAgentTask({
-    prompt: `Start the dev server for the project
+    prompt: `Return the dev-server command plan for the project
 
 ## Changed files (diff stat)
 \`\`\`
@@ -221,39 +207,40 @@ ${diffStat}
 
   logModel("codeTest:dev-server", defaults.provider, `dev-server agent result:\n${result}`);
 
-  let parsed: { url: string | null; pids?: number[]; port?: number };
+  let plan: DevServerCommandPlan;
   try {
-    parsed = parseJsonBlock(result);
+    plan = devServerCommandPlanSchema.parse(parseJsonBlock(result));
   } catch {
-    throw new Error(`Could not parse dev-server output:\n${result}`);
+    throw new Error(`Could not parse dev-server command plan:\n${result}`);
   }
-  if (!parsed.url) throw new Error(`Dev server failed to start:\n${result}`);
 
-  return { url: parsed.url, pids: parsed.pids ?? [], port: parsed.port };
+  return launchDevServer(project, plan);
+}
+
+function launchDevServer(cwd: string, plan: DevServerCommandPlan): DevServer {
+  const pids: number[] = [];
+
+  for (const command of plan.commands) {
+    const child = spawn("sh", ["-lc", command.command], {
+      cwd,
+      detached: true,
+      stdio: "ignore",
+    });
+    if (child.pid) pids.push(child.pid);
+    child.unref();
+    log("codeTest:dev-server", `started "${command.name ?? command.command}" pid=${child.pid ?? "?"}`);
+  }
+  return { url: plan.url, pids, port: plan.port };
 }
 
 const killTree = promisify(
   treeKill as (pid: number, signal: string, cb: (err?: Error) => void) => void,
 );
 
-async function pidsOnPort(port: number): Promise<number[]> {
-  const cmd =
-    process.platform === "win32"
-      ? $`powershell -NoProfile -Command "(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue).OwningProcess"`
-      : $`lsof -ti tcp:${port} -sTCP:LISTEN`;
-  const out = await cmd.nothrow().text();
-  return [...new Set(out.split(/\s+/).map(Number).filter((n) => n > 0))];
-}
-
 async function killDevServer(server: DevServer): Promise<void> {
   const targets = new Set<number>(server.pids.filter((n) => n > 0));
-  if (server.port) {
-    try {
-      for (const pid of await pidsOnPort(server.port)) targets.add(pid);
-    } catch { }
-  }
   if (targets.size === 0) {
-    log("codeTest", "No PID or port to stop the dev server with");
+    log("codeTest", "No PID to stop the dev server with");
     return;
   }
 

@@ -76,8 +76,7 @@ export async function queryAgentReadOnly(opts: NoPRAgentOptions): Promise<AgentR
 
 /**
  * Non-PR agent that runs directly in `cwd` (defaults to the resolved project).
- * No worktree, no commit/push/PR. Use for side-effecting Bash tasks such as
- * starting or killing a dev server. The caller controls permissions via
+ * No worktree, no commit/push/PR. The caller controls permissions via
  * `opts.agentMode`.
  */
 export async function queryAgentTask(opts: NoPRAgentOptions & { cwd?: string }): Promise<AgentRunResult> {

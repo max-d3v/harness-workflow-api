@@ -12,7 +12,7 @@ import type { AgentMode, AgentOptions, AgentRunResult, TokenUsage } from "../age
 const CODEX_SANDBOX_BY_MODE: Record<AgentMode, SandboxMode> = {
   prompt: "danger-full-access",
   code_review: "read-only",
-  qa_dev_server: "danger-full-access",
+  qa_dev_server: "read-only",
   qa_tester: "read-only",
 };
 

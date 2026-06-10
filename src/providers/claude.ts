@@ -8,7 +8,7 @@ const CLAUDE_CODE_PRESET = { type: "preset" as const, preset: "claude_code" as c
 const CLAUDE_TOOLS_BY_MODE: Record<AgentMode, AgentOptions["tools"]> = {
   prompt: CLAUDE_CODE_PRESET,
   code_review: ["Read", "Glob", "Grep"],
-  qa_dev_server: ["Bash", "Read", "Glob", "Grep"],
+  qa_dev_server: ["Read", "Glob", "Grep"],
   qa_tester: ["Read", "Glob", "Grep"],
 };
 
