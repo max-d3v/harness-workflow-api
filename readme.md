@@ -71,6 +71,8 @@ response:
 
 ## POST /mode/code-test
 
+Warning: automated QA does not currently work with Codex. Use the default Claude provider for code-test until Codex QA support is fixed.
+
 request:
 ```json
 {
@@ -102,6 +104,8 @@ response:
 # Defaults and more details
 
 Claude Code is the default CLI. Pass `"cli": "codex"` (or `"provider": "codex"`) to use `codex exec` instead. Mode calls resolve `model` and `effort` from `provider_defaults` in `src/config.ts` unless the request overrides them.
+
+Code testing uses `qa` defaults for the tester agent and `qa_dev_server` defaults for the dev-server starter. Pass `"serverModel"` in a code-test request to override only the dev-server starter model.
 
 Provider runs print streamed model actions to the server terminal when `show_model_actions` is enabled in `src/config.ts`. Turn it off there to keep only request start, success, cancellation, and error logs.
 

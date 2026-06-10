@@ -2,12 +2,12 @@ import { queryAgentReadOnly, queryAgentTask, resolvePath, type AgentCli, type Ag
 import { resolveProviderDefaults } from "../config.ts";
 import { log, logModel } from "../logging.ts";
 import {
-  getCurrentBranch,
+  // getCurrentBranch,
   getPRInfo,
   getPRDiff,
   getPRDiffStat,
   commentOnPR,
-  resolvePRHeadBranchCwd,
+  // resolvePRHeadBranchCwd,
 } from "../git.ts";
 import {
   beginPullRequestRun,
@@ -59,17 +59,59 @@ const SERVER_INITIATOR_SYSTEM_PROMPT = `
 You start a project's dev server so another agent can drive it in a browser.
 You will receive the diff stat (list of changed files) from the PR under test.
 Use it to detect which apps or services are needed to run to test the affected changes.
-Be aware for apps that need multiple things to run, like a db + app. so always check root commands first.
+Be aware for apps that need multiple things to run, like a db + app. so always check root dev commands first.
 
 
 Steps:
 1. Read the diff stat to determine which part of the project changed.
 2. Detect the package manager (bun.lockb→bun, pnpm-lock.yaml→pnpm, yarn.lock→yarn, else npm) and install dependencies.
-3. Find the right dev script, IF THERE IS A ROOT DEV COMMAND PRIORIZE IT.
+3. Find the right dev script.
 4. Start everything DETACHED so it survives after you exit:
    nohup <pkgmgr> run dev > /tmp/devserver.log 2>&1 & echo $!
    then run \`disown\`.
 5. Poll /tmp/devserver.log until the server prints a local URL and is reachable (curl -sf). Give up after ~30s.
+
+Output ONLY a final fenced json block, nothing after it:
+\`\`\`json
+{ "url": "http://localhost:3000", "pids": [12345], "port": 3000 }
+\`\`\`
+"pids" = every PID in the server's process tree you can identify. If the server will not come up, set "url" to null and explain briefly before the json block.`;
+
+
+const SERVER_INITIATOR_SYSTEM_PROMPT_CODEX = `
+You start the minimum necessary dev server(s) for a project so another agent can drive the app in a browser.
+
+You will receive a PR diff stat. Use it to decide which app(s) or services are affected.
+
+General rules:
+- Prefer existing project instructions in README or package scripts.
+- In monorepos, prefer a root script that starts the affected app and required local services together.
+- If a root script named dev:app, dev:web, dev:local, app:dev, start:app, or similar clearly targets the affected app, use that instead of plain dev.
+- Use plain dev only when no more specific suitable script exists.
+- Do not start unrelated apps if a narrower project script exists.
+- Detect package manager in this order:
+  bun.lock or bun.lockb -> bun
+  pnpm-lock.yaml -> pnpm
+  yarn.lock -> yarn
+  package-lock.json -> npm
+  otherwise npm
+- Install dependencies only if node_modules is missing or the package manager clearly requires it.
+- Do not rerun the chosen command in foreground.
+
+
+Steps:
+1. Read the diff stat and inspect package.json files plus project docs to choose the right dev command.
+2. Determine the working directory for the command. Prefer repo root for monorepo root scripts.
+3. Start the command detached so it survives after you exit.
+   Use a unique log path, e.g. /tmp/devserver-$RANDOM.log.
+   Prefer:
+   nohup sh -lc '<COMMAND>' > "$LOG" 2>&1 & echo $!
+   Then run:
+   disown || true
+4. Poll the log for a local URL such as http://localhost:<port> or http://127.0.0.1:<port>.
+5. If no URL is printed, infer likely ports from the command/framework/config, then try common ports: 3000, 3001, 5173, 4173, 8080, 8000.
+6. Use curl -sf against the discovered URL until it responds or until about 30 seconds have passed.
+7. Identify the root PID and any child PIDs you can find with pgrep -P recursively.
 
 Output ONLY a final fenced json block, nothing after it:
 \`\`\`json
@@ -148,12 +190,12 @@ async function startDevServer(
     abortController: AbortController;
   },
 ): Promise<DevServer> {
-  const defaults = resolveProviderDefaults("qa", {
+  const defaults = resolveProviderDefaults("qa_dev_server", {
     ...opts,
     model: opts.serverModel,
   });
   const { result } = await queryAgentTask({
-    prompt: `Start the dev server for the project in this directory: ${project}
+    prompt: `Start the dev server for the project
 
 ## Changed files (diff stat)
 \`\`\`
@@ -220,6 +262,7 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
   if (!input.pr) throw new Error("Missing required field: pr");
 
   const project = resolvePath(input.project);
+  const requestedProvider = input.cli ?? input.provider ?? "claude";
   const run = beginPullRequestRun({
     kind: "code-test",
     project,
@@ -227,6 +270,9 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
     controller,
   });
   log("codeTest", `request started: testing PR ${input.pr} in ${project}`);
+  if (requestedProvider === "codex") {
+    log("codeTest", "request warning: automated QA does not currently work with Codex; use Claude for code-test.");
+  }
 
   let server: DevServer | null = null;
   let cleanupPRHeadBranchCwd: () => Promise<void> = async () => {};
@@ -237,9 +283,13 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
   };
 
   try {
-    const startComment = run.replacedExisting
+    const codexWarning =
+      requestedProvider === "codex"
+        ? `\n\n**Warning:** automated QA does not currently work with Codex. Use Claude for code-test until Codex QA support is fixed.`
+        : "";
+    const startComment = (run.replacedExisting
       ? `♻️ **New QA Run Started.**\n\nA newer automated QA run was requested for this PR, so the older run was cancelled and this new QA run is starting now.`
-      : `🧪 **Automated QA started.**`;
+      : `🧪 **Automated QA started.**`) + codexWarning;
     await commentOnPR(project, input.pr, startComment).catch((commentErr) =>
       log("codeTest", "failed to post start comment:", commentErr),
     );
@@ -257,14 +307,15 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
       return { result: "No changes found in PR", prUrl: prInfo.url };
     }
 
-    const initialBranch = await getCurrentBranch(project);
-    const prHeadBranchContext = await resolvePRHeadBranchCwd({
-      cwd: project,
-      initialBranch,
-      pullRequest: prInfo,
-    });
-    cleanupPRHeadBranchCwd = prHeadBranchContext.cleanup;
-    const { prHeadBranchCwd } = prHeadBranchContext;
+    const prHeadBranchCwd = project;
+    // const initialBranch = await getCurrentBranch(project);
+    // const prHeadBranchContext = await resolvePRHeadBranchCwd({
+    //   cwd: project,
+    //   initialBranch,
+    //   pullRequest: prInfo,
+    // });
+    // cleanupPRHeadBranchCwd = prHeadBranchContext.cleanup;
+    // const { prHeadBranchCwd } = prHeadBranchContext;
     throwIfCancelled();
 
     let testUrl: string;
