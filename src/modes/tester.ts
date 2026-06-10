@@ -20,8 +20,7 @@ import treeKill from "tree-kill";
 import { $ } from "bun";
 import { imageServer } from "../tools/screenshot-upload.ts";
 
-const githubEnv = process.env.GITHUB_TOKEN
-if (!githubEnv) throw Error("No github token provided.")
+const githubEnv = process.env.GITHUB_TOKEN;
 
 interface CodeTestInput {
   // Repo path (worktree or local checkout). Required: the PR diff/comment
@@ -39,20 +38,26 @@ interface CodeTestInput {
   effort?: AgentOptions["effort"];
 }
 
-const MCP_SERVERS: Record<string, McpServerConfig> = {
-  playwright: {
-    command: "npx",
-    args: ["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
-  },
-  imageUploader: imageServer,
-  github: {
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-github"],
-    env: {
-      GITHUB_PERSONAL_ACCESS_TOKEN: githubEnv
-    }
+function buildMcpServers(): Record<string, McpServerConfig> {
+  if (!githubEnv) {
+    throw new Error("GITHUB_TOKEN is required for /mode/code-test so the QA agent can post PR comments.");
   }
-};
+
+  return {
+    playwright: {
+      command: "npx",
+      args: ["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
+    },
+    imageUploader: imageServer,
+    github: {
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-github"],
+      env: {
+        GITHUB_PERSONAL_ACCESS_TOKEN: githubEnv,
+      },
+    },
+  };
+}
 const MCP_TOOLS_ALLOWED = ["mcp__playwright", "mcp__imageUploader", "mcp__github__add_issue_comment"];
 
 const SERVER_INITIATOR_SYSTEM_PROMPT = `
@@ -355,7 +360,7 @@ ${diff}
       cli: defaults.provider,
       agentMode: "qa_tester",
       systemPrompt: TESTER_SYSTEM_PROMPT,
-      mcpServers: MCP_SERVERS,
+      mcpServers: buildMcpServers(),
       allowedTools: MCP_TOOLS_ALLOWED,
       model: defaults.model,
       effort: defaults.effort,

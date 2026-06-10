@@ -1,8 +1,12 @@
 import type { NextFunction, Request, Response } from "express";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { log } from "./logging.ts";
 
-const API_TOKEN = process.env.CODING_HARNESS_API_TOKEN_SHA256;
+const API_TOKEN_SHA256 = process.env.CODING_HARNESS_API_TOKEN_SHA256?.trim();
+
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 function safeTokenEquals(a: string, b: string): boolean {
   const aBuffer = Buffer.from(a);
@@ -20,14 +24,14 @@ function getRequestToken(req: Request): string | undefined {
 }
 
 export function requireTokenAuth(req: Request, res: Response, next: NextFunction): void {
-  if (!API_TOKEN) {
-    log("auth", "TOKEN is not set; rejecting protected request");
+  if (!API_TOKEN_SHA256) {
+    log("auth", "CODING_HARNESS_API_TOKEN_SHA256 is not set; rejecting protected request");
     res.status(500).json({ error: "Server auth token is not configured" });
     return;
   }
 
   const requestToken = getRequestToken(req);
-  if (!requestToken || !safeTokenEquals(requestToken, API_TOKEN)) {
+  if (!requestToken || !safeTokenEquals(sha256Hex(requestToken), API_TOKEN_SHA256)) {
     res.setHeader("WWW-Authenticate", "Bearer");
     res.status(401).json({ error: "Unauthorized" });
     return;

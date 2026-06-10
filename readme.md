@@ -4,24 +4,69 @@ Use your Claude or Codex subscription plan through an HTTP wrapper to run autono
 
 # Prerequisites
 
-- Bun
-- Either a logged-in Claude CLI or a logged-in Codex CLI
-- A logged-in GitHub CLI
-- [Gitshot](https://github.com/vipulgupta2048/gitshot), via `npx`, for uploading QA screenshots to a dedicated image repo on the logged-in GitHub account so they can be embedded in PR comments
-- `CLAUDE_HARNESS_API_TOKEN` set in `.env`
+- Bun and Node/npm available on the machine running the API. QA mode uses `npx` for Playwright MCP, GitHub MCP, and Gitshot.
+- A local git checkout for each project you pass in requests.
+- A logged-in GitHub CLI (`gh auth login`). The API uses `gh` to read PRs, post reviews/comments, create PRs, and push branches.
+- Either a logged-in Claude CLI or a logged-in Codex CLI, depending on which provider you call.
+- `CODING_HARNESS_API_TOKEN_SHA256` set in `.env` for HTTP bearer-token auth.
+- `GITHUB_TOKEN` set in `.env` for `/mode/code-test`, so the QA agent can post PR comments through the GitHub MCP server.
+- [Gitshot](https://github.com/vipulgupta2048/gitshot), via `npx`, for uploading QA screenshots to a dedicated image repo on the logged-in GitHub account so they can be embedded in PR comments.
+
+# Setup
+
+Install dependencies:
+
+```bash
+bun install
+```
+
+Create `.env`:
+
+```bash
+cp .env.example .env
+```
+
+Generate the raw API token and store only its SHA-256 hash on the server:
+
+```bash
+RAW_TOKEN="$(openssl rand -hex 32)"
+HASH="$(printf '%s' "$RAW_TOKEN" | shasum -a 256 | awk '{print $1}')"
+printf '%s\n' "$RAW_TOKEN"
+HASH="$HASH" perl -0pi -e 's/^CODING_HARNESS_API_TOKEN_SHA256=.*/CODING_HARNESS_API_TOKEN_SHA256=$ENV{HASH}/m' .env
+```
+
+The printed `RAW_TOKEN` is the value clients send in the `Authorization` header. If GitHub Actions calls this API, save that raw token as a repository secret named `coding_harness_api_token`.
+
+For QA mode, add a GitHub personal access token to `.env`:
+
+```env
+GITHUB_TOKEN=github_pat_...
+```
+
+Start the API:
+
+```bash
+bun run start
+```
 
 # Auth
 
-Protected endpoints require a bearer token:
+Protected endpoints require bearer-token auth. Send the raw token; the server hashes it and compares it to `CODING_HARNESS_API_TOKEN_SHA256`.
 
 ```bash
 curl -X POST "http://localhost:3000/mode/code-review" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $CLAUDE_HARNESS_API_TOKEN" \
+  -H "Authorization: Bearer $RAW_TOKEN" \
   -d '{"pr":2,"project":"code/nextjs-boilerplate"}'
 ```
 
-`GET /health` is public so health checks can run without a token. All other endpoints return `401 Unauthorized` when the token is missing or invalid. If `CLAUDE_HARNESS_API_TOKEN` is not set on the server, protected endpoints return `500` until it is configured.
+`GET /health` is public so health checks can run without a token. All other endpoints return `401 Unauthorized` when the token is missing or invalid. If `CODING_HARNESS_API_TOKEN_SHA256` is not set on the server, protected endpoints return `500` until it is configured.
+
+The example GitHub Action in `src/examples/repository-code-review-action.yaml` expects:
+
+- repository variable `claude_harness_api_url`
+- repository variable `project_local_path`
+- repository secret `coding_harness_api_token`, containing the raw token, not the SHA-256 hash
 
 # Modes
 
