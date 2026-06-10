@@ -10,19 +10,6 @@ app.use(express.json());
 
 const PORT = Number(process.env.PORT) || 3000;
 
-function abortOnCancelledRequest(req: Request, res: Response, controller: AbortController): void {
-  const reason = new Error("Request cancelled by client");
-  const abort = () => {
-    if (!controller.signal.aborted) {
-      controller.abort(reason);
-    }
-  };
-
-  req.once("aborted", abort);
-  res.once("close", () => {
-    if (!res.writableFinished) abort();
-  });
-}
 
 app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", runtime: "bun", functions: Object.keys(MODES) });
@@ -46,7 +33,6 @@ app.post("/prompt", async (req: Request, res: Response) => {
   }
 
   const ac = new AbortController();
-  abortOnCancelledRequest(req, res, ac);
   log(
     "POST /prompt",
     `request started: provider=${body.cli ?? body.provider ?? "claude"} project=${body.project} originBranch=${body.originBranch}`,
@@ -79,7 +65,6 @@ app.post("/mode/:name", async (req: Request, res: Response) => {
   }
 
   const ac = new AbortController();
-  abortOnCancelledRequest(req, res, ac);
   log(`POST /mode/${modeName}`, "request started");
 
   try {
