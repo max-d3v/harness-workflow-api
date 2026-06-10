@@ -4,6 +4,9 @@ export type Effort = "low" | "medium" | "high" | "max";
 // Controls verbose provider stream logs: reasoning, model text, tool calls, and step updates.
 export const show_model_actions = true;
 
+// When true, code review may submit a GitHub "request changes" review for blocking findings.
+export const request_changes_when_needed = true;
+
 interface ModeDefaults {
   model: string;
   effort: Effort;

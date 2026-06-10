@@ -1,5 +1,5 @@
 import { queryAgentReadOnly, resolvePath, type AgentCli, type AgentOptions } from "../agent.ts";
-import { resolveProviderDefaults } from "../config.ts";
+import { request_changes_when_needed, resolveProviderDefaults } from "../config.ts";
 import { log, logModel } from "../logging.ts";
 import {
   getCurrentBranch,
@@ -23,6 +23,31 @@ interface CodeReviewInput {
   provider?: AgentCli;
   model?: string;
   effort?: AgentOptions["effort"];
+}
+
+type ReviewDecision = "comment_only" | "request_changes";
+
+interface ParsedReviewDecision {
+  decision: ReviewDecision;
+  body: string;
+  markerCount: number;
+}
+
+const REVIEW_DECISION_MARKER_RE =
+  /<!--\s*review-decision:\s*(request_changes|comment_only)\s*-->/gi;
+
+function parseReviewDecision(result: string): ParsedReviewDecision {
+  const matches = [...result.matchAll(REVIEW_DECISION_MARKER_RE)];
+  const decision =
+    matches.length === 1 && matches[0]?.[1]?.toLowerCase() === "request_changes"
+      ? "request_changes"
+      : "comment_only";
+  const body = result.replace(REVIEW_DECISION_MARKER_RE, "").trim();
+  return {
+    decision,
+    body: body || result.trim(),
+    markerCount: matches.length,
+  };
 }
 
 const THERMO_NUCLEAR_REVIEW_PROMPT = `---
@@ -218,35 +243,30 @@ Treat these as presumptive blockers unless the author can justify them clearly:
 
 If those conditions are not met, leave explicit, actionable feedback and push for a cleaner decomposition.`;
 
-const SYSTEM_PROMPT = `You are a senior code reviewer with READ-ONLY access — do not attempt to edit any files.
+const REVIEW_DECISION_PROMPT = `
+## Review Decision
 
-You will receive a git diff from a pull request. Be **brutally honest** about what you see. Your primary lens is **clean code quality, especially DRY**. You also flag real bugs when you see them — but you do not invent bugs to fill out a review.
+At the very end of your review, include exactly one machine-readable decision marker:
 
-## What to look for (in priority order)
+<!-- review-decision: request_changes -->
 
-1. **DRY violations** — repeated logic, copy-pasted blocks, parallel structures that should share an abstraction, magic values duplicated across files
-2. **Unnecessary complexity** — abstractions built for hypothetical needs, indirection with no payoff, code harder to read than the problem requires
-3. **Dead weight** — unused params, dead branches, defensive checks for impossible states, comments that restate the code, leftover scaffolding
-4. **Naming & structure** — names that mislead or obscure intent, functions doing too many things, unclear module boundaries
-5. **Bugs & correctness** — logic errors, off-by-ones, null/undefined risks, security issues, performance problems. **Only flag a bug if you are highly confident it is real.** If you'd hedge with "could," "might," "potentially," "in theory" — don't flag it.
+or
 
-## Hard rules
+<!-- review-decision: comment_only -->
 
-- **Do not invent issues.** If you have to speculate about edge cases or hypothetical inputs to make something a problem, it is not a finding. Quality over quantity.
-- **No filler categories.** Do not include "considerations," "potential issues," "nitpicks," "things to think about," or "future improvements." Only concrete, defensible findings.
-- **No generic best-practice suggestions.** Do not suggest adding tests, types, error handling, comments, or logging unless their absence is a real problem in this specific diff.
-- **No style/formatting comments** unless readability is actually harmed.
-- **No praise.** Skip "nice work" and "good job."
-- **Three real findings beats twelve speculative ones.** A short review is a good review.
+Use \`request_changes\` when the review contains at least one actionable blocking issue that should prevent merging under the Approval Bar above.
 
-## Format
+Use \`comment_only\` when the PR is acceptable to merge as-is, the feedback is optional or informational, or you are uncertain whether the issue is actually blocking.
 
-For each finding:
-- Cite \file:line\ from the diff
-- Explain the problem in one or two sentences
-- Show a concrete fix as a code snippet
+Do not use \`request_changes\` for style nits, speculative concerns, questions without a concrete requested change, or nice-to-have refactors.
 
-If the diff is clean, write one sentence saying so. Do not pad.`;
+The marker must appear exactly once, after the human-readable review body.`;
+
+function buildCodeReviewSystemPrompt(): string {
+  if (!request_changes_when_needed) return THERMO_NUCLEAR_REVIEW_PROMPT;
+  return `${THERMO_NUCLEAR_REVIEW_PROMPT}${REVIEW_DECISION_PROMPT}`;
+}
+
 
 export async function codeReview(input: CodeReviewInput, controller: AbortController) {
   if (!input.project) throw new Error("Missing required field: project");
@@ -319,7 +339,7 @@ ${diff}
       cwd: prHeadBranchCwd,
       cli: defaults.provider,
       agentMode: "code_review",
-      systemPrompt: THERMO_NUCLEAR_REVIEW_PROMPT,
+      systemPrompt: buildCodeReviewSystemPrompt(),
       model: defaults.model,
       effort: defaults.effort,
       loadProjectSettings: true,
@@ -330,12 +350,37 @@ ${diff}
 
     logModel("codeReview", defaults.provider, `reviewer agent result:\n${result}`);
 
-    await commentOnPR(project, input.pr, result).catch((commentErr) =>
+    const parsedReview = request_changes_when_needed
+      ? parseReviewDecision(result)
+      : ({ decision: "comment_only", body: result.trim(), markerCount: 0 } satisfies ParsedReviewDecision);
+    if (request_changes_when_needed && parsedReview.markerCount !== 1) {
+      log(
+        "codeReview",
+        `review decision marker count was ${parsedReview.markerCount}; defaulting to comment_only`,
+      );
+    }
+
+    await commentOnPR(
+      project,
+      input.pr,
+      parsedReview.body,
+      parsedReview.decision === "request_changes" ? "request_changes" : "comment",
+    ).catch((commentErr) =>
       log("codeReview", "failed to post review comment:", commentErr),
     );
 
-    log("codeReview", `request succeeded: reviewed PR #${prInfo.number}`);
-    return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, model, totalTokens, usage, totalCostUsd };
+    log("codeReview", `request succeeded: reviewed PR #${prInfo.number} decision=${parsedReview.decision}`);
+    return {
+      result: parsedReview.body,
+      reviewDecision: parsedReview.decision,
+      sessionId,
+      prUrl: prInfo.url,
+      prNumber: prInfo.number,
+      model,
+      totalTokens,
+      usage,
+      totalCostUsd,
+    };
   } catch (err) {
     if (isSupersededPullRequestRun(run.signal)) {
       log("codeReview", `request stopped: PR ${input.pr} review superseded by a newer request`);
