@@ -16,6 +16,12 @@ export async function collectAgent(opts: AgentOptions, cwd: string): Promise<Age
           "request warning: Codex SDK does not receive per-run MCP server config; using local Codex configuration.",
         );
       }
+      if (opts.allowedTools) {
+        log(
+          "agent",
+          "request warning: Codex SDK does not receive per-run tools; using local Codex configuration.",
+        );
+      }
       return collectCodexSdk(opts, cwd);
     case "claude":
       return collectClaudeSdk(opts, cwd);

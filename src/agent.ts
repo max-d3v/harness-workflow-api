@@ -58,6 +58,7 @@ export async function queryAgent(opts: AgentOptions): Promise<AgentResult> {
   }
 }
 
+
 type NoPRAgentOptions = Omit<AgentOptions, "originBranch"> & {
   originBranch?: string;
   cwd?: string;

@@ -28,7 +28,7 @@ export const provider_defaults = {
     },
     qa_dev_server: {
       model: "gpt-5.5",
-      effort: "medium",
+      effort: "high",
     },
   },
   claude: {

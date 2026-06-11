@@ -8,6 +8,7 @@ import {
   getPRDiffStat,
   commentOnPR,
   resolvePRHeadBranchCwd,
+  resolvePullRequestReviewAction,
 } from "../git.ts";
 import {
   beginPullRequestRun,
@@ -360,19 +361,30 @@ ${diff}
       );
     }
 
+    const requestedReviewAction =
+      parsedReview.decision === "request_changes" ? "request_changes" : "comment";
+    const reviewAction = await resolvePullRequestReviewAction({
+      project,
+      requestedAction: requestedReviewAction,
+      prAuthorLogin: prInfo.authorLogin,
+    });
+
     await commentOnPR(
       project,
       input.pr,
       parsedReview.body,
-      parsedReview.decision === "request_changes" ? "request_changes" : "comment",
+      reviewAction,
     ).catch((commentErr) =>
       log("codeReview", "failed to post review comment:", commentErr),
     );
 
-    log("codeReview", `request succeeded: reviewed PR #${prInfo.number} decision=${parsedReview.decision}`);
+    log(
+      "codeReview",
+      `request succeeded: reviewed PR #${prInfo.number} decision=${parsedReview.decision} action=${reviewAction}`,
+    );
     return {
       result: parsedReview.body,
-      reviewDecision: parsedReview.decision,
+      reviewDecision: reviewAction === "request_changes" ? "request_changes" : "comment_only",
       sessionId,
       prUrl: prInfo.url,
       prNumber: prInfo.number,

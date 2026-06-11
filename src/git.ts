@@ -2,6 +2,7 @@ import { $ } from "bun";
 import { randomBytes } from "crypto";
 import path from "path";
 import { realpath, rm, stat } from "fs/promises";
+import { z } from "zod";
 import { log } from "./logging.ts";
 
 export interface WorktreeContext {
@@ -79,6 +80,7 @@ export interface PRInfo {
   baseBranch: string;
   headBranch: string;
   url: string;
+  authorLogin: string | null;
   owner: string;
   repo: string;
 }
@@ -90,9 +92,24 @@ export interface PRHeadBranchCwd {
   cleanup: () => Promise<void>;
 }
 
+const GitHubPullRequestViewSchema = z.object({
+  number: z.number(),
+  title: z.string(),
+  baseRefName: z.string(),
+  headRefName: z.string(),
+  url: z.string(),
+  author: z
+    .object({
+      login: z.string().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
+});
+
 export async function getPRInfo(project: string, pr: string | number): Promise<PRInfo> {
-  const json = await $`gh pr view ${pr} --json number,title,baseRefName,headRefName,url`.cwd(project).text();
-  const data = JSON.parse(json);
+  const json = await $`gh pr view ${pr} --json number,title,baseRefName,headRefName,url,author`.cwd(project).text();
+  const raw: unknown = JSON.parse(json);
+  const data = GitHubPullRequestViewSchema.parse(raw);
   // gh returns the canonical PR URL: https://<host>/<owner>/<repo>/pull/<n>
   const [owner, repo] = new URL(data.url).pathname.split("/").filter(Boolean);
   if (!owner || !repo) {
@@ -104,6 +121,7 @@ export async function getPRInfo(project: string, pr: string | number): Promise<P
     baseBranch: data.baseRefName,
     headBranch: data.headRefName,
     url: data.url,
+    authorLogin: data.author?.login ?? null,
     owner,
     repo,
   };
@@ -280,6 +298,42 @@ export async function getPRDiffStat(project: string, pr: string | number): Promi
 }
 
 export type PullRequestReviewAction = "comment" | "request_changes";
+
+export function canRequestChangesForPullRequest(
+  prAuthorLogin: string | null | undefined,
+  reviewerLogin: string | null | undefined,
+): boolean {
+  if (!prAuthorLogin || !reviewerLogin) return true;
+  return prAuthorLogin.toLowerCase() !== reviewerLogin.toLowerCase();
+}
+
+export async function getAuthenticatedGitHubLogin(project: string): Promise<string | null> {
+  const login = await $`gh api user --jq .login`.cwd(project).text();
+  return login.trim() || null;
+}
+
+export async function resolvePullRequestReviewAction(input: {
+  project: string;
+  requestedAction: PullRequestReviewAction;
+  prAuthorLogin: string | null;
+}): Promise<PullRequestReviewAction> {
+  if (input.requestedAction !== "request_changes") return input.requestedAction;
+
+  const reviewerLogin = await getAuthenticatedGitHubLogin(input.project).catch((err) => {
+    log("github", "failed to determine authenticated GitHub user before requesting changes:", err);
+    return null;
+  });
+
+  if (canRequestChangesForPullRequest(input.prAuthorLogin, reviewerLogin)) {
+    return "request_changes";
+  }
+
+  log(
+    "github",
+    `downgrading request_changes to comment because PR author and reviewer are both ${reviewerLogin}`,
+  );
+  return "comment";
+}
 
 export async function commentOnPR(
   project: string,

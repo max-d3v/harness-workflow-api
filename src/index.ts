@@ -4,6 +4,7 @@ import { requireTokenAuth } from "./auth.ts";
 import { queryAgent, type AgentOptions } from "./agent.ts";
 import { MODES } from "./modes/index.ts";
 import { log } from "./logging.ts";
+import { killActiveDevServers } from "./modes/tester.ts";
 
 const app = express();
 app.use(express.json());
@@ -82,7 +83,7 @@ app.post("/mode/:name", async (req: Request, res: Response) => {
   }
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`
   Claude Harness API — http://localhost:${PORT}
   Auth: Bearer token + Claude CLI OAuth or Codex CLI | Runtime: Bun ${Bun.version}
@@ -91,4 +92,26 @@ app.listen(PORT, () => {
   POST /mode/:name   Specific mode (${Object.keys(MODES).join(", ")})
   GET  /health       Status
   `);
+});
+
+let shutdownInProgress = false;
+
+process.on("SIGINT", () => {
+  if (shutdownInProgress) {
+    log("shutdown", "received SIGINT while shutdown is already running; exiting");
+    process.exit(130);
+  }
+
+  shutdownInProgress = true;
+  log("shutdown", "received SIGINT; stopping active dev servers");
+
+  void killActiveDevServers("SIGINT")
+    .catch((err) => {
+      log("shutdown", "failed to stop active dev servers:", err);
+    })
+    .finally(() => {
+      server.close(() => {
+        process.exit(130);
+      });
+    });
 });

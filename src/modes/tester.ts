@@ -1,4 +1,4 @@
-import { queryAgentReadOnly, queryAgentTask, resolvePath, type AgentCli, type AgentOptions } from "../agent.ts";
+import { queryAgent, queryAgentReadOnly, queryAgentTask, resolvePath, type AgentCli, type AgentOptions } from "../agent.ts";
 import { resolveProviderDefaults } from "../config.ts";
 import { log, logModel } from "../logging.ts";
 import {
@@ -7,6 +7,8 @@ import {
   getPRDiff,
   getPRDiffStat,
   commentOnPR,
+  getCurrentBranch,
+  resolvePRHeadBranchCwd,
   // resolvePRHeadBranchCwd,
 } from "../git.ts";
 import {
@@ -20,6 +22,7 @@ import { spawn } from "node:child_process";
 import { z } from "zod";
 import treeKill from "tree-kill";
 import { imageServer } from "../tools/screenshot-upload.ts";
+import { parseJsonBlock } from "../lib/output-parser.ts";
 
 const githubEnv = process.env.GITHUB_TOKEN_USER;
 
@@ -64,15 +67,13 @@ const MCP_TOOLS_ALLOWED = ["mcp__playwright", "mcp__imageUploader", "mcp__github
 const SERVER_INITIATOR_SYSTEM_PROMPT = `
 You identify the exact dev-server command(s) this harness should execute so another agent can drive the app in a browser.
 You will receive the diff stat (list of changed files) from the PR under test.
-Use it to detect which apps or services are needed to run to test the affected changes.
-Be aware for apps that need multiple things to run, like a db + app. so always check root dev commands first.
+Use it to detect which parts of the system need to run together.
 
 Rules:
-- Prefer existing project instructions in README or package scripts.
-- In monorepos, prefer a root script that starts the affected app and required local services together.
+- Prefer existing project instructions/commands in README or package scripts.
+- In monorepos, prefer a root script that starts services together.
 - If a root script named dev:app, dev:web, dev:local, app:dev, start:app, or similar clearly targets the affected app, use that instead of plain dev.
 - Use plain dev only when no more specific suitable script exists.
-- Do not start unrelated apps if a narrower project script exists.
 - Detect package manager in this order:
   bun.lock or bun.lockb -> bun
   pnpm-lock.yaml -> pnpm
@@ -82,7 +83,7 @@ Rules:
 - Do not include dependency install commands.
 - Do not run commands, install dependencies, open ports, curl URLs, or start a server yourself. Your only job is to return the command plan.
 - Use shell command strings exactly as they should be executed by \`sh -lc\`.
-- Set \`url\` to the expected local app URL. Set \`port\` too when it is knowable from scripts, config, docs, or framework defaults.
+- Set \`url\` to the expected local app URL. Set \`ports\` too when ports are knowable from scripts, config, docs, or framework defaults.
 - Commands always run from the repository cwd provided in the request. Do not include cwd or env fields.
 
 Output ONLY a final fenced json block, nothing before or after it:
@@ -92,7 +93,7 @@ Output ONLY a final fenced json block, nothing before or after it:
     { "name": "web", "command": "pnpm dev --filter web" }
   ],
   "url": "http://localhost:3000",
-  "port": 3000
+  "ports": [3000]
 }
 \`\`\`
 "commands" should contain only long-running processes that should be killed after testing.`;
@@ -152,10 +153,15 @@ You have READ-ONLY repo access (Read/Glob/Grep) for context only — do not atte
 Your final text response is not posted anywhere; it is only an internal log of which sections you covered.`;
 
 interface DevServer {
+  id: string;
+  cwd: string;
+  commands: string[];
   url: string;
   pids: number[];
-  port?: number;
+  ports?: number[];
 }
+
+const portSchema = z.number().int().positive().max(65535);
 
 const devServerCommandPlanSchema = z.object({
   commands: z.array(z.object({
@@ -163,16 +169,14 @@ const devServerCommandPlanSchema = z.object({
     command: z.string().trim().min(1),
   }).strict()).nonempty(),
   url: z.string().trim().min(1),
-  port: z.number().int().positive().max(65535).optional(),
+  ports: z.array(portSchema).nonempty().optional(),
 }).strict();
 
 type DevServerCommandPlan = z.infer<typeof devServerCommandPlanSchema>;
 
-function parseJsonBlock(text: string): any {
-  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
-  const candidate = fenced?.[1] ?? text.slice(text.lastIndexOf("{"));
-  return JSON.parse(candidate.trim());
-}
+const activeDevServers = new Map<string, DevServer>();
+let nextDevServerId = 1;
+
 
 async function startDevServer(
   project: string,
@@ -185,13 +189,16 @@ async function startDevServer(
     ...opts,
     model: opts.serverModel,
   });
-  const { result } = await queryAgentTask({
-    prompt: `Return the dev-server command plan for the project
+  const prompt = `Return the dev-server command plan for the project
 
 ## Changed files (diff stat)
 \`\`\`
 ${diffStat}
-\`\`\``,
+\`\`\``
+
+
+  const { result } = await queryAgentTask({
+    prompt,
     project,
     cwd: project,
     cli: defaults.provider,
@@ -218,7 +225,11 @@ ${diffStat}
 }
 
 function launchDevServer(cwd: string, plan: DevServerCommandPlan): DevServer {
-  const pids: number[] = [];
+  console.log(plan)
+  const id = `dev-server-${nextDevServerId++}`;
+  const commands = plan.commands.map((command) => command.name ?? command.command);
+  const server: DevServer = { id, cwd, commands, url: plan.url, pids: [], ports: plan.ports };
+  registerDevServer(server);
 
   for (const command of plan.commands) {
     const child = spawn("sh", ["-lc", command.command], {
@@ -226,27 +237,52 @@ function launchDevServer(cwd: string, plan: DevServerCommandPlan): DevServer {
       detached: true,
       stdio: "ignore",
     });
-    if (child.pid) pids.push(child.pid);
+    if (child.pid) server.pids.push(child.pid);
     child.unref();
     log("codeTest:dev-server", `started "${command.name ?? command.command}" pid=${child.pid ?? "?"}`);
   }
-  return { url: plan.url, pids, port: plan.port };
+
+  return server;
 }
 
 const killTree = promisify(
   treeKill as (pid: number, signal: string, cb: (err?: Error) => void) => void,
 );
 
+function registerDevServer(server: DevServer): void {
+  activeDevServers.set(server.id, server);
+}
+
+function unregisterDevServer(server: DevServer): void {
+  activeDevServers.delete(server.id);
+}
+
+export async function killActiveDevServers(reason: string): Promise<void> {
+  const servers = [...activeDevServers.values()];
+  if (servers.length === 0) return;
+
+  log(
+    "codeTest:dev-server",
+    `${reason}: stopping ${servers.length} active dev server${servers.length === 1 ? "" : "s"}`,
+  );
+  await Promise.all(servers.map((server) => killDevServer(server)));
+}
+
 async function killDevServer(server: DevServer): Promise<void> {
   const targets = new Set<number>(server.pids.filter((n) => n > 0));
   if (targets.size === 0) {
     log("codeTest", "No PID to stop the dev server with");
+    unregisterDevServer(server);
     return;
   }
 
-  for (const pid of targets) await killTree(pid, "SIGTERM").catch(() => { });
-  await new Promise((r) => setTimeout(r, 3000));
-  for (const pid of targets) await killTree(pid, "SIGKILL").catch(() => { });
+  try {
+    for (const pid of targets) await killTree(pid, "SIGTERM").catch(() => { });
+    await new Promise((r) => setTimeout(r, 3000));
+    for (const pid of targets) await killTree(pid, "SIGKILL").catch(() => { });
+  } finally {
+    unregisterDevServer(server);
+  }
 }
 
 export async function codeTest(input: CodeTestInput, controller: AbortController) {
@@ -266,13 +302,14 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
     log("codeTest", "request warning: automated QA does not currently work with Codex; use Claude for code-test.");
   }
 
-  let server: DevServer | null = null;
+  
   let cleanupPRHeadBranchCwd: () => Promise<void> = async () => {};
   const throwIfCancelled = () => {
     if (run.signal.aborted) {
       throw run.signal.reason ?? new Error("Automated QA cancelled");
     }
   };
+  let devServer: DevServer | null = null;
 
   try {
     const codexWarning =
@@ -299,23 +336,26 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
       return { result: "No changes found in PR", prUrl: prInfo.url };
     }
 
-    const prHeadBranchCwd = project;
-    // const initialBranch = await getCurrentBranch(project);
-    // const prHeadBranchContext = await resolvePRHeadBranchCwd({
-    //   cwd: project,
-    //   initialBranch,
-    //   pullRequest: prInfo,
-    // });
-    // cleanupPRHeadBranchCwd = prHeadBranchContext.cleanup;
-    // const { prHeadBranchCwd } = prHeadBranchContext;
+    
+    const initialBranch = await getCurrentBranch(project);
+    const prHeadBranchContext = await resolvePRHeadBranchCwd({
+      cwd: project,
+      initialBranch,
+      pullRequest: prInfo,
+    });
+    cleanupPRHeadBranchCwd = prHeadBranchContext.cleanup;
+    const { prHeadBranchCwd } = prHeadBranchContext;
     throwIfCancelled();
 
+
     let testUrl: string;
+    
     if (input.url) {
       testUrl = input.url;
     } else {
-      server = await startDevServer(prHeadBranchCwd, stat, { ...input, abortController: run.controller });
-      testUrl = server.url;
+      devServer = await startDevServer(project, stat, { ...input, abortController: run.controller });
+      console.log(devServer)
+      testUrl = devServer.url;
     }
     throwIfCancelled();
 
@@ -339,11 +379,14 @@ ${diff}
 \`\`\`
 
 `;
+
+console.log(project)
+console.log(prHeadBranchCwd)
     const defaults = resolveProviderDefaults("qa", input);
-    const { result, sessionId, model, totalTokens, usage, totalCostUsd } = await queryAgentReadOnly({
+    const { result, sessionId, model, totalTokens, usage, totalCostUsd } = await queryAgent({
       prompt,
-      project: prHeadBranchCwd,
-      cwd: prHeadBranchCwd,
+      project: project,
+      originBranch: initialBranch,
       cli: defaults.provider,
       agentMode: "qa_tester",
       systemPrompt: TESTER_SYSTEM_PROMPT,
@@ -396,7 +439,7 @@ ${diff}
     );
     throw err;
   } finally {
-    if (server) await killDevServer(server);
+    if (devServer) await killDevServer(devServer);
     await cleanupPRHeadBranchCwd().catch((cleanupErr) =>
       log("codeTest", "failed to clean up PR head branch worktree:", cleanupErr),
     );

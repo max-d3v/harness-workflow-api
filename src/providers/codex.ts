@@ -16,6 +16,9 @@ const CODEX_SANDBOX_BY_MODE: Record<AgentMode, SandboxMode> = {
   qa_tester: "read-only",
 };
 
+// OPENAI greedy asses dont let me pass my own mcp and tools into the codex execution... im stuck with the users local configuration (WHICH IS ASSSS FROM A BUTTT)
+// Ill need to use skills so the codex model can browse, use gstack browser skill to test ts 
+
 function resolveAgentMode(opts: Pick<AgentOptions, "agentMode">): AgentMode {
   return opts.agentMode ?? "prompt";
 }
@@ -124,6 +127,7 @@ export async function collectCodexSdk(opts: AgentOptions, cwd: string): Promise<
       show_raw_agent_reasoning: show_model_actions,
     },
   });
+  
   const thread = codex.startThread({
     workingDirectory: cwd,
     model: opts.model,

@@ -7,9 +7,6 @@ Use your Claude or Codex subscription plan through an HTTP wrapper to run autono
 - Bun and Node/npm available on the machine running the API. QA mode uses `npx` for Playwright MCP, GitHub MCP, and Gitshot.
 - A local git checkout for each project you pass in requests.
 - A logged-in GitHub CLI (`gh auth login`). The API uses `gh` to read PRs, post reviews/comments, create PRs, and push branches.
-- Either a logged-in Claude CLI or a logged-in Codex CLI, depending on which provider you call.
-- `CODING_HARNESS_API_TOKEN` set in `.env` for HTTP bearer-token auth.
-- `GITHUB_TOKEN` set in `.env` for `/mode/code-test`, so the QA agent can post PR comments through the GitHub MCP server.
 - [Gitshot](https://github.com/vipulgupta2048/gitshot), via `npx`, for uploading QA screenshots to a dedicated image repo on the logged-in GitHub account so they can be embedded in PR comments.
 
 # Setup
