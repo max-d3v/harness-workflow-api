@@ -76,8 +76,7 @@ Given a PR and project, the harness you choose performs a review with Cursor's i
 
 ## QA
 
-Given a PR and a project, the harness spawns two agents: one starts the dev server related to the change, and the other uses Playwright or browser MCP, the diff context, and any optional login information you passed to access the application and test it.
-At the end, the QA dev server is killed.
+Given a PR, a project, and one or more functional app URLs, the harness uses Playwright or browser MCP, the diff context, and any optional login information you passed to access the application and test it.
 It adds comments to the PR with its findings as it goes, so if it gets stuck or throws an error, the things it already tested will remain.
 
 # Examples
@@ -133,14 +132,17 @@ request:
 {
   "pr": 2,
   "project": "code/nextjs-boilerplate",
+  "url": "https://nextjs-boilerplate-git-pr-2-example.vercel.app",
   "loginInstructions": "email: automation@gmail.com, senha: automationPassword, username: automation" // This is a dummy profile I created in my app's auth for the agent to access.
 }
 ```
 
+Pass `"urls": ["https://preview.example.com", "https://admin-preview.example.com"]` when a QA run needs to exercise multiple surfaces.
+
 response:
 ```json
 {
-  "result": "## Automated QA complete\n\nTested the README change and confirmed the application still starts successfully. No issues found.",
+  "result": "## Automated QA complete\n\nTested the preview URL and confirmed the changed flow still works. No issues found.",
   "sessionId": "7207f92b-d5a3-4162-949c-90a25d26e737",
   "prUrl": "https://github.com/max-d3v/orion-kit/pull/2",
   "prNumber": 2,
@@ -160,13 +162,13 @@ response:
 
 Claude Code is the default CLI. Pass `"cli": "codex"` (or `"provider": "codex"`) to use `codex exec` instead. Mode calls resolve `model` and `effort` from `provider_defaults` in `src/config.ts` unless the request overrides them.
 
-Code testing uses `qa` defaults for the tester agent and `qa_dev_server` defaults for the dev-server starter. Pass `"serverModel"` in a code-test request to override only the dev-server starter model.
+Code testing uses `qa` defaults for the tester agent. A code-test request must include `"url"` or `"urls"` with reachable HTTP(S) app URLs.
 
 Provider runs print streamed model actions to the server terminal when `show_model_actions` is enabled in `src/config.ts`. Turn it off there to keep only request start, success, cancellation, and error logs.
 
 If a provider or mode has no configured defaults, requests must pass the missing values explicitly or the API will throw.
 
-Agent access is controlled with the optional `"access"` field: `"all-access"` enables editing tools, while `"read-only"` limits the agent to repository inspection. Prompt mode defaults to all-access; review, QA dev-server, and QA tester runs pass read-only access explicitly.
+Agent access is controlled with the optional `"access"` field: `"all-access"` enables editing tools, while `"read-only"` limits the agent to repository inspection. Prompt mode defaults to all-access; review and QA tester runs pass read-only access explicitly.
 
 You can persist sessions, but I’m against it. If you have a problem big enough that Opus with high reasoning can’t one-shot, just use your t3code locally and go at it.
 

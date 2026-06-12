@@ -5,13 +5,17 @@ import { openPR, queryAgentInNewWorktree, type AgentOptions } from "./agent.ts";
 import { resolveProviderDefaults } from "./config.ts";
 import { MODES } from "./modes/index.ts";
 import { log } from "./logging.ts";
-import { killActiveDevServers } from "./modes/tester.ts";
 
 const app = express();
 app.use(express.json());
 
 const PORT = Number(process.env.PORT) || 3000;
 
+function isClientInputError(err: unknown): err is Error {
+  return err instanceof Error
+    && (err.message.startsWith("Missing required field:")
+      || err.message.startsWith("Invalid QA url:"));
+}
 
 app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", runtime: "bun", functions: Object.keys(MODES) });
@@ -109,7 +113,7 @@ app.post("/mode/:name", async (req: Request, res: Response) => {
       return;
     }
     log(`POST /mode/${modeName}`, "request failed:", err);
-    res.status(500).json({ error: err.message ?? "Internal server error" });
+    res.status(isClientInputError(err) ? 400 : 500).json({ error: err.message ?? "Internal server error" });
   }
 });
 
@@ -133,15 +137,9 @@ process.on("SIGINT", () => {
   }
 
   shutdownInProgress = true;
-  log("shutdown", "received SIGINT; stopping active dev servers");
+  log("shutdown", "received SIGINT; closing server");
 
-  void killActiveDevServers("SIGINT")
-    .catch((err) => {
-      log("shutdown", "failed to stop active dev servers:", err);
-    })
-    .finally(() => {
-      server.close(() => {
-        process.exit(130);
-      });
-    });
+  server.close(() => {
+    process.exit(130);
+  });
 });

@@ -60,10 +60,6 @@ export async function queryAgent(opts: QueryAgentOptions): Promise<AgentRunResul
   return collectAgent(opts, resolvePath(opts.cwd ?? opts.project));
 }
 
-export async function queryAgentInLocalCheckout(opts: QueryAgentOptions): Promise<AgentRunResult> {
-  return queryAgent(opts);
-}
-
 export async function queryAgentInNewWorktree(
   opts: QueryAgentInNewWorktreeOptions,
 ): Promise<QueryAgentInNewWorktreeResult> {

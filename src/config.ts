@@ -1,4 +1,4 @@
-export type ModeDefaultsName = "code_review" | "prompt" | "qa" | "qa_dev_server";
+export type ModeDefaultsName = "code_review" | "prompt" | "qa";
 export type Effort = "low" | "medium" | "high" | "max";
 
 // Controls verbose provider stream logs: reasoning, model text, tool calls, and step updates.
@@ -26,10 +26,6 @@ export const provider_defaults = {
       model: "gpt-5.4",
       effort: "medium",
     },
-    qa_dev_server: {
-      model: "gpt-5.5",
-      effort: "high",
-    },
   },
   claude: {
     code_review: {
@@ -41,10 +37,6 @@ export const provider_defaults = {
       effort: "high",
     },
     qa: {
-      model: "claude-opus-4-6",
-      effort: "medium",
-    },
-    qa_dev_server: {
       model: "claude-opus-4-6",
       effort: "medium",
     },
