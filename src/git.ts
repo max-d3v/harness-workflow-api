@@ -1,7 +1,7 @@
 import { $ } from "bun";
 import { randomBytes } from "crypto";
 import path from "path";
-import { realpath, rm, stat } from "fs/promises";
+import { copyFile, realpath, rm, stat } from "fs/promises";
 import { z } from "zod";
 import { log } from "./logging.ts";
 
@@ -37,7 +37,26 @@ export async function createWorktree(
     } catch {}
   };
 
+  try {
+    await copyRootEnvToWorktree(project, worktreePath);
+  } catch (err) {
+    await cleanup().catch((cleanupErr) =>
+      log("git", "failed to clean up new worktree after .env copy error:", cleanupErr),
+    );
+    throw err;
+  }
+
   return { worktreePath, branch, originBranch, project, cleanup };
+}
+
+async function copyRootEnvToWorktree(root: string, worktreePath: string): Promise<void> {
+  const source = path.join(root, ".env");
+  const exists = await stat(source)
+    .then((file) => file.isFile())
+    .catch(() => false);
+  if (!exists) return;
+
+  await copyFile(source, path.join(worktreePath, ".env"));
 }
 
 export async function commitAndPush(ctx: WorktreeContext, message: string): Promise<boolean> {
@@ -281,7 +300,11 @@ export async function getOrCreatePRHeadBranchCwd(input: {
   const worktreePath = await nextAvailableWorktreePath(input.cwd, localPullRequestBranch);
   try {
     await $`git -C ${input.cwd} worktree add ${worktreePath} ${localPullRequestBranch}`.quiet();
+    await copyRootEnvToWorktree(input.cwd, worktreePath);
   } catch (err) {
+    await removeReviewWorktree(input.cwd, worktreePath, localPullRequestBranch, !hadLocalPullRequestBranch).catch(
+      () => {},
+    );
     if (!hadLocalPullRequestBranch) {
       await $`git -C ${input.cwd} branch -D ${localPullRequestBranch}`.quiet().catch(() => {});
     }

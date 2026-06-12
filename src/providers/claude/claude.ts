@@ -1,7 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { logModel, log } from "../logging.ts";
-import type { AgentAccess, AgentMode, AgentOptions, AgentRunResult, TokenUsage } from "../agent-types.ts";
-import { DEFAULT_MAX_TURNS } from "../agent-types.ts";
+import { logModel, log } from "../../logging.ts";
+import type { AgentAccess, AgentMode, AgentOptions, AgentRunResult, TokenUsage } from "../../agent-types.ts";
+import { DEFAULT_MAX_TURNS } from "../../agent-types.ts";
 
 const CLAUDE_CODE_PRESET = { type: "preset" as const, preset: "claude_code" as const };
 

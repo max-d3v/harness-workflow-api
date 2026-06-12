@@ -1,21 +1,26 @@
 import {
   Codex,
+  type CodexOptions,
   type ModelReasoningEffort,
   type ReasoningItem,
   type SandboxMode,
   type ThreadEvent,
 } from "@openai/codex-sdk";
-import { show_model_actions } from "../config.ts";
-import { logModel, log } from "../logging.ts";
-import type { AgentAccess, AgentMode, AgentOptions, AgentRunResult, TokenUsage } from "../agent-types.ts";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { show_model_actions } from "../../config.ts";
+import { logModel, log } from "../../logging.ts";
+import type { AgentAccess, AgentMode, AgentOptions, AgentRunResult, TokenUsage } from "../../agent-types.ts";
 
 const CODEX_SANDBOX_BY_ACCESS: Record<AgentAccess, SandboxMode> = {
   "all-access": "danger-full-access",
   "read-only": "read-only",
 };
 
-// OPENAI greedy asses dont let me pass my own mcp and tools into the codex execution... im stuck with the users local configuration (WHICH IS ASSSS FROM A BUTTT)
-// Ill need to use skills so the codex model can browse, use gstack browser skill to test ts 
+const CODEX_BYPASS_WRAPPER = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "codex-bypass-wrapper.sh",
+);
 
 function resolveAgentMode(opts: Pick<AgentOptions, "agentMode">): AgentMode {
   return opts.agentMode ?? "prompt";
@@ -40,6 +45,19 @@ ${prompt}`;
 function codexReasoningEffortFor(effort?: AgentOptions["effort"]): ModelReasoningEffort | undefined {
   if (effort === "max") return "xhigh";
   return effort;
+}
+
+function shouldBypassCodexApprovals(opts: Pick<AgentOptions, "mcpServers" | "allowedTools">): boolean {
+  return Boolean(opts.mcpServers || opts.allowedTools);
+}
+
+function buildCodexOptions(opts: Pick<AgentOptions, "mcpServers" | "allowedTools">): CodexOptions {
+  return {
+    ...(shouldBypassCodexApprovals(opts) && { codexPathOverride: CODEX_BYPASS_WRAPPER }),
+    config: {
+      show_raw_agent_reasoning: show_model_actions,
+    },
+  };
 }
 
 function textFromUnknown(value: unknown): string | undefined {
@@ -97,7 +115,7 @@ function summarizeCodexEvent(event: ThreadEvent): string | undefined {
         case "file_change":
           return `${prefix} file_change ${item.status}: ${item.changes.map((change) => `${change.kind} ${change.path}`).join(", ")}`;
         case "mcp_tool_call":
-          return `${prefix} mcp ${item.server}.${item.tool} ${item.status}`;
+          return `${prefix} mcp ${item.server}.${item.tool} ${item.status}${item.error?.message ? `: ${clip(item.error.message, 500)}` : ""}`;
         case "web_search":
           return `${prefix} web_search: ${clip(item.query, 500)}`;
         case "todo_list":
@@ -125,17 +143,21 @@ function logGithubCommentEvent(event: ThreadEvent, logLabel?: string): void {
 }
 
 export async function collectCodexSdk(opts: AgentOptions, cwd: string): Promise<AgentRunResult> {
-  const codex = new Codex({
-    config: {
-      show_raw_agent_reasoning: show_model_actions,
-    },
-  });
+  const bypassCodexApprovals = shouldBypassCodexApprovals(opts);
+  if (bypassCodexApprovals) {
+    log(
+      opts.logLabel ?? "codex",
+      "using Codex approvals bypass wrapper so configured local MCP tools can run unattended",
+    );
+  }
+
+  const codex = new Codex(buildCodexOptions(opts));
   
   const thread = codex.startThread({
     workingDirectory: cwd,
     model: opts.model,
-    sandboxMode: codexSandboxFor(opts),
-    approvalPolicy: "never",
+    sandboxMode: bypassCodexApprovals ? "danger-full-access" : codexSandboxFor(opts),
+    approvalPolicy: bypassCodexApprovals ? undefined : "never",
     modelReasoningEffort: codexReasoningEffortFor(opts.effort),
     skipGitRepoCheck: true,
   });
