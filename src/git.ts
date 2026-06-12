@@ -264,13 +264,8 @@ function onceCleanup(cleanup: () => Promise<void>): () => Promise<void> {
 
 export async function getOrCreatePRHeadBranchCwd(input: {
   cwd: string;
-  initialBranch: string | null;
   pullRequest: PRInfo;
 }): Promise<PRHeadBranchCwd> {
-  if (input.initialBranch === input.pullRequest.headBranch) {
-    return { prHeadBranchCwd: input.cwd, worktreePath: null, createdWorktreePath: null, cleanup: async () => {} };
-  }
-
   const localPullRequestBranch = resolvePullRequestWorktreeLocalBranchName(input.pullRequest);
   const rootWorktreePath = await canonicalizeExistingPath(input.cwd);
   const hadLocalPullRequestBranch = await localBranchExists(input.cwd, localPullRequestBranch);

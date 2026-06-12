@@ -11,7 +11,6 @@ import {
   getPRDiff,
   getPRDiffStat,
   commentOnPR,
-  getCurrentBranch,
 } from "../git.ts";
 import {
   beginPullRequestRun,
@@ -136,9 +135,6 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
       return { result: "No changes found in PR", prUrl: prInfo.url };
     }
 
-    const initialBranch = await getCurrentBranch(project);
-    throwIfCancelled();
-
     const { loginInstructions } = input;
     const loginInstructionsPrompt = `If you need to login into the app, use the following instructions: ${loginInstructions}`;
     const focus = input.focus ? `\nFocus area: ${input.focus}` : "";
@@ -167,7 +163,6 @@ ${diff}
       prompt,
       project,
       pullRequest: prInfo,
-      initialBranch,
       cli: defaults.provider,
       agentMode: "qa_tester",
       access: "read-only",

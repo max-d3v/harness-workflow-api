@@ -2,7 +2,6 @@ import { homedir } from "os";
 import path from "path";
 import {
   createWorktree,
-  getCurrentBranch,
   getOrCreatePRHeadBranchCwd,
   type PRInfo,
   type PRHeadBranchCwd,
@@ -53,7 +52,6 @@ export interface QueryAgentInPRWorktreeResult extends AgentRunResult, PRHeadBran
 
 export type QueryAgentInPRWorktreeOptions = QueryAgentOptions & {
   pullRequest: PRInfo;
-  initialBranch?: string | null;
 };
 
 export async function queryAgent(opts: QueryAgentOptions): Promise<AgentRunResult> {
@@ -93,10 +91,9 @@ export async function queryAgentInPRWorktree(
   opts: QueryAgentInPRWorktreeOptions,
 ): Promise<QueryAgentInPRWorktreeResult> {
   const project = resolvePath(opts.project);
-  const { initialBranch, pullRequest, ...agentOpts } = opts;
+  const { pullRequest, ...agentOpts } = opts;
   const prHeadBranchContext = await getOrCreatePRHeadBranchCwd({
     cwd: project,
-    initialBranch: initialBranch ?? (await getCurrentBranch(project)),
     pullRequest,
   });
 
