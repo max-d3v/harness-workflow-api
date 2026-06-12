@@ -40,17 +40,18 @@ export async function createWorktree(
   return { worktreePath, branch, originBranch, project, cleanup };
 }
 
-export async function commitAndPush(ctx: WorktreeContext, message: string): Promise<void> {
+export async function commitAndPush(ctx: WorktreeContext, message: string): Promise<boolean> {
   const cwd = ctx.worktreePath;
   const status = await $`git -C ${cwd} status --porcelain`.text();
-  if (!status.trim()) return;
+  if (!status.trim()) return false;
 
   await $`git -C ${cwd} add -A`.quiet();
   await $`git -C ${cwd} commit -m ${message}`.quiet();
   await $`git -C ${cwd} push -u origin ${ctx.branch}`.quiet();
+  return true;
 }
 
-export async function openPR(
+async function createPullRequest(
   ctx: WorktreeContext,
   title: string,
   body: string,
@@ -62,6 +63,16 @@ export async function openPR(
     --body ${body} \
     --draft`.cwd(ctx.worktreePath).text();
   return result.trim();
+}
+
+export async function openPR(
+  ctx: WorktreeContext,
+  title: string,
+  body: string,
+): Promise<string | undefined> {
+  const committed = await commitAndPush(ctx, title);
+  if (!committed) return undefined;
+  return createPullRequest(ctx, title, body);
 }
 
 export async function getDiff(project: string, originBranch: string): Promise<string> {
@@ -232,7 +243,7 @@ function onceCleanup(cleanup: () => Promise<void>): () => Promise<void> {
   };
 }
 
-export async function resolvePRHeadBranchCwd(input: {
+export async function getOrCreatePRHeadBranchCwd(input: {
   cwd: string;
   initialBranch: string | null;
   pullRequest: PRInfo;

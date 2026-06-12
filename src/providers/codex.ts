@@ -7,13 +7,11 @@ import {
 } from "@openai/codex-sdk";
 import { show_model_actions } from "../config.ts";
 import { logModel, log } from "../logging.ts";
-import type { AgentMode, AgentOptions, AgentRunResult, TokenUsage } from "../agent-types.ts";
+import type { AgentAccess, AgentMode, AgentOptions, AgentRunResult, TokenUsage } from "../agent-types.ts";
 
-const CODEX_SANDBOX_BY_MODE: Record<AgentMode, SandboxMode> = {
-  prompt: "danger-full-access",
-  code_review: "read-only",
-  qa_dev_server: "read-only",
-  qa_tester: "read-only",
+const CODEX_SANDBOX_BY_ACCESS: Record<AgentAccess, SandboxMode> = {
+  "all-access": "danger-full-access",
+  "read-only": "read-only",
 };
 
 // OPENAI greedy asses dont let me pass my own mcp and tools into the codex execution... im stuck with the users local configuration (WHICH IS ASSSS FROM A BUTTT)
@@ -23,8 +21,13 @@ function resolveAgentMode(opts: Pick<AgentOptions, "agentMode">): AgentMode {
   return opts.agentMode ?? "prompt";
 }
 
-function codexSandboxFor(opts: Pick<AgentOptions, "agentMode">): SandboxMode {
-  return CODEX_SANDBOX_BY_MODE[resolveAgentMode(opts)];
+function defaultAccessForMode(mode: AgentMode): AgentAccess {
+  return mode === "prompt" ? "all-access" : "read-only";
+}
+
+function codexSandboxFor(opts: Pick<AgentOptions, "access" | "agentMode">): SandboxMode {
+  if (opts.access) return CODEX_SANDBOX_BY_ACCESS[opts.access];
+  return CODEX_SANDBOX_BY_ACCESS[defaultAccessForMode(resolveAgentMode(opts))];
 }
 
 function buildCodexPrompt(prompt: string, systemPrompt?: string): string {

@@ -1,20 +1,17 @@
-import { queryAgent, queryAgentReadOnly, queryAgentTask, resolvePath, type AgentCli, type AgentOptions } from "../agent.ts";
+import { queryAgentInLocalCheckout, resolvePath, type AgentCli, type AgentOptions } from "../agent.ts";
 import { resolveProviderDefaults } from "../config.ts";
 import { log, logModel } from "../logging.ts";
 import {
-  // getCurrentBranch,
   getPRInfo,
   getPRDiff,
   getPRDiffStat,
   commentOnPR,
   getCurrentBranch,
-  resolvePRHeadBranchCwd,
-  // resolvePRHeadBranchCwd,
+  getOrCreatePRHeadBranchCwd,
 } from "../git.ts";
 import {
   beginPullRequestRun,
   isSupersededPullRequestRun,
-  pullRequestRunKindLabel,
 } from "../pr-run-controller.ts";
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import { promisify } from "node:util";
@@ -197,12 +194,13 @@ ${diffStat}
 \`\`\``
 
 
-  const { result } = await queryAgentTask({
+  const { result } = await queryAgentInLocalCheckout({
     prompt,
     project,
     cwd: project,
     cli: defaults.provider,
     agentMode: "qa_dev_server",
+    access: "read-only",
     systemPrompt: SERVER_INITIATOR_SYSTEM_PROMPT,
     model: defaults.model,
     effort: defaults.effort,
@@ -225,7 +223,6 @@ ${diffStat}
 }
 
 function launchDevServer(cwd: string, plan: DevServerCommandPlan): DevServer {
-  console.log(plan)
   const id = `dev-server-${nextDevServerId++}`;
   const commands = plan.commands.map((command) => command.name ?? command.command);
   const server: DevServer = { id, cwd, commands, url: plan.url, pids: [], ports: plan.ports };
@@ -338,7 +335,7 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
 
     
     const initialBranch = await getCurrentBranch(project);
-    const prHeadBranchContext = await resolvePRHeadBranchCwd({
+    const prHeadBranchContext = await getOrCreatePRHeadBranchCwd({
       cwd: project,
       initialBranch,
       pullRequest: prInfo,
@@ -353,8 +350,7 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
     if (input.url) {
       testUrl = input.url;
     } else {
-      devServer = await startDevServer(project, stat, { ...input, abortController: run.controller });
-      console.log(devServer)
+      devServer = await startDevServer(prHeadBranchCwd, stat, { ...input, abortController: run.controller });
       testUrl = devServer.url;
     }
     throwIfCancelled();
@@ -380,15 +376,14 @@ ${diff}
 
 `;
 
-console.log(project)
-console.log(prHeadBranchCwd)
     const defaults = resolveProviderDefaults("qa", input);
-    const { result, sessionId, model, totalTokens, usage, totalCostUsd } = await queryAgent({
+    const { result, sessionId, model, totalTokens, usage, totalCostUsd } = await queryAgentInLocalCheckout({
       prompt,
-      project: project,
-      originBranch: initialBranch,
+      project: prHeadBranchCwd,
+      cwd: prHeadBranchCwd,
       cli: defaults.provider,
       agentMode: "qa_tester",
+      access: "read-only",
       systemPrompt: TESTER_SYSTEM_PROMPT,
       mcpServers: buildMcpServers(),
       allowedTools: MCP_TOOLS_ALLOWED,

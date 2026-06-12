@@ -1,12 +1,20 @@
-import { createWorktree, commitAndPush, openPR } from "./git.ts";
 import { homedir } from "os";
 import path from "path";
-import { resolveProviderDefaults } from "./config.ts";
+import {
+  createWorktree,
+  getCurrentBranch,
+  getOrCreatePRHeadBranchCwd,
+  type PRInfo,
+  type PRHeadBranchCwd,
+  type WorktreeContext,
+} from "./git.ts";
 import { log } from "./logging.ts";
 import { collectAgent } from "./providers/index.ts";
-import type { AgentOptions, AgentResult, AgentRunResult } from "./agent-types.ts";
+import type { AgentOptions, AgentRunResult } from "./agent-types.ts";
 
+export { openPR } from "./git.ts";
 export type {
+  AgentAccess,
   AgentCli,
   AgentMode,
   AgentOptions,
@@ -22,64 +30,95 @@ export function resolvePath(p: string): string {
   return path.resolve(p);
 }
 
-export async function queryAgent(opts: AgentOptions): Promise<AgentResult> {
-  const project = resolvePath(opts.project);
-  const ctx = await createWorktree(project, opts.originBranch);
-  const defaults = resolveProviderDefaults("prompt", opts);
-  const agentOpts = {
-    ...opts,
-    cli: defaults.provider,
-    model: defaults.model,
-    effort: defaults.effort,
-    agentMode: "prompt" as const,
-  };
-
-  try {
-    const { result, sessionId, model, totalTokens, usage, totalCostUsd } = await collectAgent(
-      agentOpts,
-      ctx.worktreePath,
-    );
-
-    let prUrl: string | undefined;
-
-    if (!opts.skipPR) {
-      const title = opts.prTitle ?? `agent: ${opts.prompt.slice(0, 60)}`;
-      await commitAndPush(ctx, title);
-      try {
-        prUrl = await openPR(ctx, title, result.slice(0, 4000));
-      } catch (err) {
-        log("openPR", "failed to create PR:", err);
-      }
-    }
-
-    return { result, sessionId, prUrl, branch: ctx.branch, model, totalTokens, usage, totalCostUsd };
-  } finally {
-    await ctx.cleanup();
-  }
-}
-
-
-type NoPRAgentOptions = Omit<AgentOptions, "originBranch"> & {
-  originBranch?: string;
+export type QueryAgentOptions = AgentOptions & {
   cwd?: string;
 };
 
-async function runNoPRAgent(opts: NoPRAgentOptions): Promise<AgentRunResult> {
-  return collectAgent(
-    { ...opts, originBranch: opts.originBranch ?? "main" } as AgentOptions,
-    opts.cwd ?? resolvePath(opts.project),
-  );
+export interface QueryAgentInNewWorktreeResult extends AgentRunResult {
+  branch: string;
+  cwd: string;
+  worktreePath: string;
+  worktree: WorktreeContext;
+  cleanup: () => Promise<void>;
 }
 
-export async function queryAgentReadOnly(opts: NoPRAgentOptions): Promise<AgentRunResult> {
-  return runNoPRAgent(opts);
+export type QueryAgentInNewWorktreeOptions = QueryAgentOptions & {
+  originBranch: string;
+  branchPrefix?: string;
+};
+
+export interface QueryAgentInPRWorktreeResult extends AgentRunResult, PRHeadBranchCwd {
+  cwd: string;
 }
 
-/**
- * Non-PR agent that runs directly in `cwd` (defaults to the resolved project).
- * No worktree, no commit/push/PR. The caller controls permissions via
- * `opts.agentMode`.
- */
-export async function queryAgentTask(opts: NoPRAgentOptions & { cwd?: string }): Promise<AgentRunResult> {
-  return runNoPRAgent(opts);
+export type QueryAgentInPRWorktreeOptions = QueryAgentOptions & {
+  pullRequest: PRInfo;
+  initialBranch?: string | null;
+};
+
+export async function queryAgent(opts: QueryAgentOptions): Promise<AgentRunResult> {
+  return collectAgent(opts, resolvePath(opts.cwd ?? opts.project));
+}
+
+export async function queryAgentInLocalCheckout(opts: QueryAgentOptions): Promise<AgentRunResult> {
+  return queryAgent(opts);
+}
+
+export async function queryAgentInNewWorktree(
+  opts: QueryAgentInNewWorktreeOptions,
+): Promise<QueryAgentInNewWorktreeResult> {
+  const project = resolvePath(opts.project);
+  const { branchPrefix, ...agentOpts } = opts;
+  const worktree = await createWorktree(project, opts.originBranch, branchPrefix);
+
+  try {
+    const result = await queryAgent({
+      ...agentOpts,
+      project: worktree.worktreePath,
+      cwd: worktree.worktreePath,
+    });
+    return {
+      ...result,
+      branch: worktree.branch,
+      cwd: worktree.worktreePath,
+      worktreePath: worktree.worktreePath,
+      worktree,
+      cleanup: worktree.cleanup,
+    };
+  } catch (err) {
+    await worktree.cleanup().catch((cleanupErr) =>
+      log("agent", "failed to clean up new worktree after agent error:", cleanupErr),
+    );
+    throw err;
+  }
+}
+
+export async function queryAgentInPRWorktree(
+  opts: QueryAgentInPRWorktreeOptions,
+): Promise<QueryAgentInPRWorktreeResult> {
+  const project = resolvePath(opts.project);
+  const { initialBranch, pullRequest, ...agentOpts } = opts;
+  const prHeadBranchContext = await getOrCreatePRHeadBranchCwd({
+    cwd: project,
+    initialBranch: initialBranch ?? (await getCurrentBranch(project)),
+    pullRequest,
+  });
+
+  try {
+    const result = await queryAgent({
+      ...agentOpts,
+      project: prHeadBranchContext.prHeadBranchCwd,
+      cwd: prHeadBranchContext.prHeadBranchCwd,
+    });
+    return {
+      ...result,
+      ...prHeadBranchContext,
+      cwd: prHeadBranchContext.prHeadBranchCwd,
+    };
+  } catch (err) {
+    await prHeadBranchContext.cleanup().catch((cleanupErr) =>
+      log("agent", "failed to clean up PR head branch worktree after agent error:", cleanupErr),
+    );
+    throw err;
+  }
 }

@@ -166,7 +166,7 @@ Provider runs print streamed model actions to the server terminal when `show_mod
 
 If a provider or mode has no configured defaults, requests must pass the missing values explicitly or the API will throw.
 
-Each mode has its own set of tools: prompt mode has all tools, and code-review mode has read-only tools.
+Agent access is controlled with the optional `"access"` field: `"all-access"` enables editing tools, while `"read-only"` limits the agent to repository inspection. Prompt mode defaults to all-access; review, QA dev-server, and QA tester runs pass read-only access explicitly.
 
 You can persist sessions, but I’m against it. If you have a problem big enough that Opus with high reasoning can’t one-shot, just use your t3code locally and go at it.
 

@@ -1,23 +1,27 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { logModel, log } from "../logging.ts";
-import type { AgentMode, AgentOptions, AgentRunResult, TokenUsage } from "../agent-types.ts";
+import type { AgentAccess, AgentMode, AgentOptions, AgentRunResult, TokenUsage } from "../agent-types.ts";
 import { DEFAULT_MAX_TURNS } from "../agent-types.ts";
 
 const CLAUDE_CODE_PRESET = { type: "preset" as const, preset: "claude_code" as const };
 
-const CLAUDE_TOOLS_BY_MODE: Record<AgentMode, AgentOptions["tools"]> = {
-  prompt: CLAUDE_CODE_PRESET,
-  code_review: ["Read", "Glob", "Grep"],
-  qa_dev_server: ["Read", "Glob", "Grep"],
-  qa_tester: ["Read", "Glob", "Grep"],
+const CLAUDE_TOOLS_BY_ACCESS: Record<AgentAccess, AgentOptions["tools"]> = {
+  "all-access": CLAUDE_CODE_PRESET,
+  "read-only": ["Read", "Glob", "Grep"],
 };
 
 function resolveAgentMode(opts: Pick<AgentOptions, "agentMode">): AgentMode {
   return opts.agentMode ?? "prompt";
 }
 
-function claudeToolsFor(opts: Pick<AgentOptions, "agentMode" | "tools">): AgentOptions["tools"] {
-  return opts.tools ?? CLAUDE_TOOLS_BY_MODE[resolveAgentMode(opts)];
+function defaultAccessForMode(mode: AgentMode): AgentAccess {
+  return mode === "prompt" ? "all-access" : "read-only";
+}
+
+function claudeToolsFor(opts: Pick<AgentOptions, "access" | "agentMode" | "tools">): AgentOptions["tools"] {
+  if (opts.tools) return opts.tools;
+  if (opts.access) return CLAUDE_TOOLS_BY_ACCESS[opts.access];
+  return CLAUDE_TOOLS_BY_ACCESS[defaultAccessForMode(resolveAgentMode(opts))];
 }
 
 function buildSdkOptions(opts: AgentOptions, cwd: string) {

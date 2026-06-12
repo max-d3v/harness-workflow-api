@@ -1,7 +1,8 @@
 import express from "express";
 import type { Request, Response } from "express";
 import { requireTokenAuth } from "./auth.ts";
-import { queryAgent, type AgentOptions } from "./agent.ts";
+import { openPR, queryAgentInNewWorktree, type AgentOptions } from "./agent.ts";
+import { resolveProviderDefaults } from "./config.ts";
 import { MODES } from "./modes/index.ts";
 import { log } from "./logging.ts";
 import { killActiveDevServers } from "./modes/tester.ts";
@@ -20,6 +21,7 @@ app.use(requireTokenAuth);
 
 app.post("/prompt", async (req: Request, res: Response) => {
   const body = req.body as AgentOptions;
+  const originBranch = body.originBranch;
   if (!body.prompt || typeof body.prompt !== "string") {
     res.status(400).json({ error: "Missing required field: prompt" });
     return;
@@ -28,7 +30,7 @@ app.post("/prompt", async (req: Request, res: Response) => {
     res.status(400).json({ error: "Missing required field: project" });
     return;
   }
-  if (!body.originBranch || typeof body.originBranch !== "string") {
+  if (!originBranch || typeof originBranch !== "string") {
     res.status(400).json({ error: "Missing required field: originBranch" });
     return;
   }
@@ -36,16 +38,40 @@ app.post("/prompt", async (req: Request, res: Response) => {
   const ac = new AbortController();
   log(
     "POST /prompt",
-    `request started: provider=${body.cli ?? body.provider ?? "claude"} project=${body.project} originBranch=${body.originBranch}`,
+    `request started: provider=${body.cli ?? body.provider ?? "claude"} project=${body.project} originBranch=${originBranch}`,
   );
 
+  let cleanupWorktree: () => Promise<void> = async () => {};
   try {
-    const result = await queryAgent({ ...body, abortController: ac });
+    const defaults = resolveProviderDefaults("prompt", body);
+    const agentRun = await queryAgentInNewWorktree({
+      ...body,
+      originBranch,
+      cli: defaults.provider,
+      model: defaults.model,
+      effort: defaults.effort,
+      agentMode: "prompt",
+      access: body.access ?? "all-access",
+      abortController: ac,
+    });
+    cleanupWorktree = agentRun.cleanup;
+
+    let prUrl: string | undefined;
+    if (!body.skipPR) {
+      const title = body.prTitle ?? `agent: ${body.prompt.slice(0, 60)}`;
+      try {
+        prUrl = await openPR(agentRun.worktree, title, agentRun.result.slice(0, 4000));
+      } catch (err) {
+        log("openPR", "failed to create PR:", err);
+      }
+    }
+
+    const { cleanup, worktree, cwd, worktreePath, ...result } = agentRun;
     log(
       "POST /prompt",
-      `request succeeded: branch=${result.branch ?? "(none)"} prUrl=${result.prUrl ?? "(skipped)"}`,
+      `request succeeded: branch=${result.branch ?? "(none)"} prUrl=${prUrl ?? "(skipped)"}`,
     );
-    res.json(result);
+    res.json({ ...result, prUrl });
   } catch (err: any) {
     if (ac.signal.aborted) {
       log("POST /prompt", "request cancelled");
@@ -54,6 +80,10 @@ app.post("/prompt", async (req: Request, res: Response) => {
     }
     log("POST /prompt", "request failed:", err);
     res.status(500).json({ error: err.message ?? "Internal server error" });
+  } finally {
+    await cleanupWorktree().catch((cleanupErr) =>
+      log("POST /prompt", "failed to clean up prompt worktree:", cleanupErr),
+    );
   }
 });
 

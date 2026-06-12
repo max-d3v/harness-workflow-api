@@ -1,19 +1,16 @@
-import { queryAgentReadOnly, resolvePath, type AgentCli, type AgentOptions } from "../agent.ts";
+import { queryAgentInPRWorktree, resolvePath, type AgentCli, type AgentOptions } from "../agent.ts";
 import { request_changes_when_needed, resolveProviderDefaults } from "../config.ts";
 import { log, logModel } from "../logging.ts";
 import {
-  getCurrentBranch,
   getPRInfo,
   getPRDiff,
   getPRDiffStat,
   commentOnPR,
-  resolvePRHeadBranchCwd,
   resolvePullRequestReviewAction,
 } from "../git.ts";
 import {
   beginPullRequestRun,
   isSupersededPullRequestRun,
-  pullRequestRunKindLabel,
 } from "../pr-run-controller.ts";
 
 interface CodeReviewInput {
@@ -310,16 +307,6 @@ export async function codeReview(input: CodeReviewInput, controller: AbortContro
       return { result: "No changes found in PR", prUrl: prInfo.url };
     }
 
-    const initialBranch = await getCurrentBranch(project);
-    const prHeadBranchContext = await resolvePRHeadBranchCwd({
-      cwd: project,
-      initialBranch,
-      pullRequest: prInfo,
-    });
-    cleanupPRHeadBranchCwd = prHeadBranchContext.cleanup;
-    const { prHeadBranchCwd } = prHeadBranchContext;
-    throwIfCancelled();
-
     const focus = input.focus ? `\nFocus area: ${input.focus}` : "";
     const prompt = `Review PR #${prInfo.number}: "${prInfo.title}" (${prInfo.headBranch} → ${prInfo.baseBranch}).${focus}
 
@@ -334,12 +321,13 @@ ${diff}
 \`\`\``;
 
     const defaults = resolveProviderDefaults("code_review", input);
-    const { result, sessionId, model, totalTokens, usage, totalCostUsd } = await queryAgentReadOnly({
+    const reviewRun = await queryAgentInPRWorktree({
       prompt,
-      project: prHeadBranchCwd,
-      cwd: prHeadBranchCwd,
+      project,
+      pullRequest: prInfo,
       cli: defaults.provider,
       agentMode: "code_review",
+      access: "read-only",
       systemPrompt: buildCodeReviewSystemPrompt(),
       model: defaults.model,
       effort: defaults.effort,
@@ -347,6 +335,8 @@ ${diff}
       logLabel: "codeReview",
       abortController: run.controller,
     });
+    cleanupPRHeadBranchCwd = reviewRun.cleanup;
+    const { result, sessionId, model, totalTokens, usage, totalCostUsd } = reviewRun;
     throwIfCancelled();
 
     logModel("codeReview", defaults.provider, `reviewer agent result:\n${result}`);
