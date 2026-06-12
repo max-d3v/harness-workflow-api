@@ -8,6 +8,7 @@ Use your Claude or Codex subscription plan through an HTTP wrapper to run autono
 - A local git checkout for each project you pass in requests.
 - A logged-in GitHub CLI (`gh auth login`). The API uses `gh` to read PRs, post reviews/comments, create PRs, and push branches.
 - [Gitshot](https://github.com/vipulgupta2048/gitshot), via `npx`, for uploading QA screenshots to a dedicated image repo on the logged-in GitHub account so they can be embedded in PR comments.
+- A reachable running app URL for QA runs. The QA endpoint is URL-only: it does not build, boot, or deploy the app for the agent.
 
 # Setup
 
@@ -76,8 +77,33 @@ Given a PR and project, the harness you choose performs a review with Cursor's i
 
 ## QA
 
-Given a PR, a project, and one or more functional app URLs, the harness uses Playwright or browser MCP, the diff context, and any optional extra instructions you passed to access the application and test it.
-It adds comments to the PR with its findings as it goes, so if it gets stuck or throws an error, the things it already tested will remain.
+Given a PR, a project, and one or more functional app URLs, the harness creates a temporary PR-head worktree for read-only context, passes the PR diff/stat to a tester agent, and tells the agent to exercise only the changed user-facing behavior through the provided URL(s).
+
+QA is URL-only. The app must already be running at the supplied absolute `http://` or `https://` URL(s), such as a Vercel preview deployment, staging URL, or local tunnel. The harness does not run `bun dev`, start services, seed data, or infer routes on its own.
+
+The QA agent reports as it goes. For every functional section it tests, it takes a screenshot, uploads it through Gitshot, and posts a scoped PR comment with the result. Working sections get a confirmation comment; broken sections get reproduction steps, expected vs. actual behavior, a likely cause or fix, and the screenshot. The agent's final response is only returned in the API response; the useful QA record lives in the PR comments already posted during the run.
+
+QA runs are read-only against the repository. The tester can inspect files for context, but it is not allowed to edit code.
+
+### QA MCP servers
+
+`/mode/code-test` starts these MCP servers for the tester agent:
+
+- `playwright`: `npx -y @playwright/mcp@latest --headless --isolated` for browser navigation and screenshots.
+- `imageUploader`: an in-process MCP server exposing `upload_screenshot`, which runs `npx gitshot <path>` and returns a GitHub Markdown image string.
+- `github`: `npx -y @modelcontextprotocol/server-github` with `GITHUB_PERSONAL_ACCESS_TOKEN` set from `GITHUB_TOKEN_USER`, used to post PR comments.
+
+The tester is only allowlisted for Playwright MCP tools, `mcp__imageUploader`, and `mcp__github__add_issue_comment`.
+
+### QA request fields
+
+- `project`: local checkout path. Relative paths resolve from the user's home directory, so `code/my-app` becomes `~/code/my-app`.
+- `pr`: pull request number.
+- `url` or `urls`: one absolute HTTP(S) app URL, or multiple URLs when a PR touches multiple surfaces.
+- `focus`: optional narrow area to prioritize.
+- `extraInstructions`: optional credentials, test data, tenant names, or other run-specific context.
+- `cli` or `provider`: optional agent provider. Use the default Claude provider for QA; Codex QA currently posts a warning because automated QA is not fixed there yet.
+- `model` and `effort`: optional overrides for the provider defaults.
 
 # Examples
 
@@ -133,11 +159,12 @@ request:
   "pr": 2,
   "project": "code/nextjs-boilerplate",
   "url": "https://nextjs-boilerplate-git-pr-2-example.vercel.app",
-  "extraInstructions": "Login example: email: automation@gmail.com, senha: automationPassword, username: automation" // This is a dummy profile I created in my app's auth for the agent to access.
+  "focus": "checkout form validation",
+  "extraInstructions": "Login example: email: automation@example.com, password: automationPassword, username: automation"
 }
 ```
 
-Pass `"urls": ["https://preview.example.com", "https://admin-preview.example.com"]` when a QA run needs to exercise multiple surfaces.
+Pass `"urls": ["https://preview.example.com", "https://admin-preview.example.com"]` when a QA run needs to exercise multiple surfaces. URLs must be absolute `http://` or `https://` values.
 
 response:
 ```json
