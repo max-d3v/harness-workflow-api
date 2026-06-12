@@ -30,7 +30,7 @@ interface CodeTestInput {
   url?: string;
   urls?: string[];
   focus?: string;
-  loginInstructions?: string;
+  extraInstructions?: string;
   cli?: AgentCli;
   provider?: AgentCli;
   model?: string;
@@ -135,15 +135,16 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
       return { result: "No changes found in PR", prUrl: prInfo.url };
     }
 
-    const { loginInstructions } = input;
-    const loginInstructionsPrompt = `If you need to login into the app, use the following instructions: ${loginInstructions}`;
+    const extraInstructions = input.extraInstructions?.trim();
+    const extraInstructionsPrompt = `Additional instructions from the user:
+${extraInstructions}`;
     const focus = input.focus ? `\nFocus area: ${input.focus}` : "";
     const targetUrlsPrompt = testUrls.map((url) => `- ${url}`).join("\n");
     const prompt = `Repository: ${prInfo.owner}/${prInfo.repo}
 PR #${prInfo.number}: "${prInfo.title}" (${prInfo.headBranch} → ${prInfo.baseBranch}).
 The app is already running at the following URL(s). Use these URLs for browser testing:
 ${targetUrlsPrompt}${focus}
-${loginInstructions ? loginInstructionsPrompt : ""}
+${extraInstructions ? extraInstructionsPrompt : ""}
 
 
 ## Diff stat

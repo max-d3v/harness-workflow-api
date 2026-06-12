@@ -76,7 +76,7 @@ Given a PR and project, the harness you choose performs a review with Cursor's i
 
 ## QA
 
-Given a PR, a project, and one or more functional app URLs, the harness uses Playwright or browser MCP, the diff context, and any optional login information you passed to access the application and test it.
+Given a PR, a project, and one or more functional app URLs, the harness uses Playwright or browser MCP, the diff context, and any optional extra instructions you passed to access the application and test it.
 It adds comments to the PR with its findings as it goes, so if it gets stuck or throws an error, the things it already tested will remain.
 
 # Examples
@@ -133,7 +133,7 @@ request:
   "pr": 2,
   "project": "code/nextjs-boilerplate",
   "url": "https://nextjs-boilerplate-git-pr-2-example.vercel.app",
-  "loginInstructions": "email: automation@gmail.com, senha: automationPassword, username: automation" // This is a dummy profile I created in my app's auth for the agent to access.
+  "extraInstructions": "Login example: email: automation@gmail.com, senha: automationPassword, username: automation" // This is a dummy profile I created in my app's auth for the agent to access.
 }
 ```
 
