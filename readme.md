@@ -1,5 +1,7 @@
 # Coding Harness API 🦹
 
+Get a better and customizable code rabbit for free!
+
 Use your Claude or Codex subscription plan through an HTTP wrapper to run autonomous coding agents and automations (code reviews, QA agents) for one-fifth of the price.
 
 # Prerequisites
@@ -95,6 +97,19 @@ QA runs are read-only against the repository. The tester can inspect files for c
 
 The tester is only allowlisted for Playwright MCP tools, `mcp__imageUploader`, and `mcp__github__add_issue_comment`.
 
+### Codex QA provider requirements
+
+Claude receives the QA `mcpServers` object directly through the Claude SDK. Codex does not. The Codex SDK only receives Codex CLI configuration overrides, so Codex QA must have the MCP server configuration wired directly in the Codex provider/config path before it can use the tester tools.
+
+For Codex QA, make sure the Codex provider exposes all of the same QA capabilities:
+
+- Playwright MCP for browser navigation and screenshots.
+- GitHub MCP with `GITHUB_TOKEN_USER`/`GITHUB_PERSONAL_ACCESS_TOKEN` for `add_issue_comment`.
+- The image upload MCP, or an equivalent `$gitshot` skill path, so screenshots can become GitHub Markdown images.
+- The local `$gitshot` skill itself. The Codex tester prompt explicitly tells the agent to upload screenshots with `$gitshot`, so this skill must be installed/available to the Codex runtime.
+
+Do not assume the `mcpServers` object built by `/mode/code-test` automatically reaches Codex. Until the Codex provider maps those MCP definitions into its own Codex config, Codex will only see MCPs and skills already present in the local Codex environment.
+
 ### QA request fields
 
 - `project`: local checkout path. Relative paths resolve from the user's home directory, so `code/my-app` becomes `~/code/my-app`.
@@ -102,7 +117,7 @@ The tester is only allowlisted for Playwright MCP tools, `mcp__imageUploader`, a
 - `url` or `urls`: one absolute HTTP(S) app URL, or multiple URLs when a PR touches multiple surfaces.
 - `focus`: optional narrow area to prioritize.
 - `extraInstructions`: optional credentials, test data, tenant names, or other run-specific context.
-- `cli` or `provider`: optional agent provider. Use the default Claude provider for QA; Codex QA currently posts a warning because automated QA is not fixed there yet.
+- `cli` or `provider`: optional agent provider. Use the default Claude provider for QA. If you choose Codex, first wire the QA MCPs and `$gitshot` skill directly into the Codex provider/config path.
 - `model` and `effort`: optional overrides for the provider defaults.
 
 # Examples
