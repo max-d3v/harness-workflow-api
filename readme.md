@@ -99,14 +99,14 @@ The tester is only allowlisted for Playwright MCP tools, `mcp__imageUploader`, a
 
 ### Codex QA provider requirements
 
-Claude receives the QA `mcpServers` object directly through the Claude SDK. Codex does not. The Codex SDK only receives Codex CLI configuration overrides, so Codex QA must have the MCP server configuration wired directly in the Codex provider/config path before it can use the tester tools.
+As of 2026-06-16, Claude receives the QA `mcpServers` object directly through the Claude SDK. Codex does not. The Codex SDK only receives Codex CLI configuration overrides, so Codex QA must have the MCP server configuration wired directly in the Codex provider/config path before it can use the tester tools. This may become outdated if future Codex configs add first-class per-run MCP support.
 
 For Codex QA, make sure the Codex provider exposes all of the same QA capabilities:
 
 - Playwright MCP for browser navigation and screenshots.
 - GitHub MCP with `GITHUB_TOKEN_USER`/`GITHUB_PERSONAL_ACCESS_TOKEN` for `add_issue_comment`.
 - The image upload MCP, or an equivalent `$gitshot` skill path, so screenshots can become GitHub Markdown images.
-- The local `$gitshot` skill itself. The Codex tester prompt explicitly tells the agent to upload screenshots with `$gitshot`, so this skill must be installed/available to the Codex runtime.
+- The local `$gitshot` skill itself. The provider-local skill definition lives at `src/providers/codex/SKILL.md`; add/install that skill into Codex through Codex plugins so the Codex runtime can actually call `$gitshot`.
 
 Do not assume the `mcpServers` object built by `/mode/code-test` automatically reaches Codex. Until the Codex provider maps those MCP definitions into its own Codex config, Codex will only see MCPs and skills already present in the local Codex environment.
 
