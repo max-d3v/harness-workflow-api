@@ -56,6 +56,7 @@ function buildMcpServers(): Record<string, McpServerConfig> {
   };
 }
 const MCP_TOOLS_ALLOWED = ["mcp__playwright", "mcp__imageUploader", "mcp__github__add_issue_comment"];
+const QA_DEV_SERVER_TOOLS: AgentOptions["tools"] = ["Read", "Glob", "Grep", "Bash"];
 
 function resolveTargetUrls(input: CodeTestInput): string[] {
   const urls = [
@@ -77,10 +78,6 @@ function resolveTargetUrls(input: CodeTestInput): string[] {
   if (invalidUrl) {
     throw new Error(`Invalid QA url: ${invalidUrl}. Pass absolute http(s) url values.`);
   }
-  if (urls.length === 0) {
-    throw new Error("Missing required field: url or urls. QA mode requires functional app URL(s).");
-  }
-
   return [...new Set(urls)];
 }
 
@@ -137,11 +134,13 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
     const extraInstructionsPrompt = `Additional instructions from the user:
 ${extraInstructions}`;
     const focus = input.focus ? `\nFocus area: ${input.focus}` : "";
-    const targetUrlsPrompt = testUrls.map((url) => `- ${url}`).join("\n");
+    const targetPrompt = testUrls.length > 0
+      ? `The app is already running at the following URL(s). Use these URLs for browser testing:
+${testUrls.map((url) => `- ${url}`).join("\n")}`
+      : "Start the dev server, use it for browser testing, and shut it down at the end of execution.";
     const prompt = `Repository: ${prInfo.owner}/${prInfo.repo}
 PR #${prInfo.number}: "${prInfo.title}" (${prInfo.headBranch} → ${prInfo.baseBranch}).
-The app is already running at the following URL(s). Use these URLs for browser testing:
-${targetUrlsPrompt}${focus}
+${targetPrompt}${focus}
 ${extraInstructions ? extraInstructionsPrompt : ""}
 
 
@@ -165,6 +164,7 @@ ${diff}
       cli: defaults.provider,
       agentMode: "qa_tester",
       access: "read-only",
+      tools: testUrls.length === 0 ? QA_DEV_SERVER_TOOLS : undefined,
       systemPrompt: resolveTesterSystemPrompt(defaults.provider),
       mcpServers: buildMcpServers(),
       allowedTools: MCP_TOOLS_ALLOWED,

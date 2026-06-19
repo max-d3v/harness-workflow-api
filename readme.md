@@ -87,9 +87,9 @@ The executor does not post a start comment. If the agent reports `no findings`, 
 
 ## QA
 
-Given a PR, a project, and one or more functional app URLs, the harness creates a temporary PR-head worktree for read-only context, passes the PR diff/stat to a tester agent, and tells the agent to exercise only the changed user-facing behavior through the provided URL(s).
+Given a PR, a project, and optional functional app URLs, the harness creates a temporary PR-head worktree for read-only context, passes the PR diff/stat to a tester agent, and tells the agent to exercise only the changed user-facing behavior through the provided URL(s) or a locally started dev server.
 
-QA is URL-only. The app must already be running at the supplied absolute `http://` or `https://` URL(s), such as a Vercel preview deployment, staging URL, or local tunnel. The harness does not run `bun dev`, start services, seed data, or infer routes on its own.
+When `url` or `urls` are supplied, the app must already be running at the supplied absolute `http://` or `https://` URL(s), such as a Vercel preview deployment, staging URL, or local tunnel. When no URL is supplied, the tester agent is instructed to start the dev server and shut it down at the end of execution.
 
 The QA agent reports as it goes. For every functional section it tests, it takes a screenshot, uploads it through Gitshot, and posts a scoped PR comment with the result. Working sections get a confirmation comment; broken sections get reproduction steps, expected vs. actual behavior, a likely cause or fix, and the screenshot. The agent's final response is only returned in the API response; the useful QA record lives in the PR comments already posted during the run.
 
@@ -103,7 +103,7 @@ QA runs are read-only against the repository. The tester can inspect files for c
 - `imageUploader`: an in-process MCP server exposing `upload_screenshot`, which runs `npx gitshot <path>` and returns a GitHub Markdown image string.
 - `github`: `npx -y @modelcontextprotocol/server-github` with `GITHUB_PERSONAL_ACCESS_TOKEN` set from `GITHUB_TOKEN_USER`, used to post PR comments.
 
-The tester is only allowlisted for Playwright MCP tools, `mcp__imageUploader`, and `mcp__github__add_issue_comment`.
+The tester is only allowlisted for Playwright MCP tools, `mcp__imageUploader`, and `mcp__github__add_issue_comment`. No-URL runs also expose shell access so the tester can start the dev server and shut it down at the end of execution.
 
 ### Codex QA provider requirements
 
@@ -122,7 +122,7 @@ Do not assume the `mcpServers` object built by `/mode/code-test` automatically r
 
 - `project`: local checkout path. Relative paths resolve from the user's home directory, so `code/my-app` becomes `~/code/my-app`.
 - `pr`: pull request number.
-- `url` or `urls`: one absolute HTTP(S) app URL, or multiple URLs when a PR touches multiple surfaces.
+- `url` or `urls`: optional. Provide one absolute HTTP(S) app URL, or multiple URLs when a PR touches multiple surfaces. If omitted, the tester agent will start the dev server and shut it down at the end of execution.
 - `focus`: optional narrow area to prioritize.
 - `extraInstructions`: optional credentials, test data, tenant names, or other run-specific context.
 - `cli` or `provider`: optional agent provider. Use the default Claude provider for QA. If you choose Codex, first wire the QA MCPs and `$gitshot` skill directly into the Codex provider/config path.
@@ -248,7 +248,7 @@ response when changes were applied:
 
 Claude Code is the default CLI. Pass `"cli": "codex"` (or `"provider": "codex"`) to use `codex exec` instead. Mode calls resolve `model` and `effort` from `provider_defaults` in `src/config.ts` unless the request overrides them.
 
-Code testing uses `qa` defaults for the tester agent. Review execution uses `review_executor` defaults and requires either `"commentId"` or `"reviewId"`. A code-test request must include `"url"` or `"urls"` with reachable HTTP(S) app URLs.
+Code testing uses `qa` defaults for the tester agent. Review execution uses `review_executor` defaults and requires either `"commentId"` or `"reviewId"`. A code-test request may include `"url"` or `"urls"` with reachable HTTP(S) app URLs; without them, the tester will start the dev server and shut it down at the end of execution.
 
 Provider runs print streamed model actions to the server terminal when `show_model_actions` is enabled in `src/config.ts`. Turn it off there to keep only request start, success, cancellation, and error logs.
 
