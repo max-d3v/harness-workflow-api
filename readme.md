@@ -4,6 +4,8 @@ Get a better and customizable code rabbit for free!
 
 Use your Claude or Codex subscription plan through an HTTP wrapper to run autonomous coding agents and automations (code reviews, QA agents) for one-fifth of the price.
 
+The fun part: if you enable both automated code reviews and the review executor, they form a repair loop. The reviewer flags blocking faults, the executor applies concrete fixes and pushes them to the PR branch, and that push triggers another review. The loop repeats until the reviewer has no more blocking faults to request changes on.
+
 # Prerequisites
 
 - Bun and Node/npm available on the machine running the API. QA mode uses `npx` for Playwright MCP, GitHub MCP, and Gitshot.
@@ -77,6 +79,8 @@ Given your prompt, project, and origin branch, it creates a worktree, chosen har
 
 Given a PR and project, the harness you choose performs a review with Cursor's internal team code review prompt (the best I have used by far) and adds it as a comment on the PR.
 
+When paired with the review executor workflow, code review is the read-only half of the loop: every PR open/reopen/synchronize event gets reviewed, including commits pushed by the executor.
+
 ## Review executor
 
 Given a PR, project, and either a top-level PR conversation `commentId` or a PR `reviewId`, the harness fetches the requested review/comment body, enters the PR head worktree, and asks the chosen agent to apply the requested review change when it is concrete and applicable.
@@ -84,6 +88,8 @@ Given a PR, project, and either a top-level PR conversation `commentId` or a PR 
 For `reviewId`, the harness includes the review body and any inline comments submitted with that review. GitHub emits top-level PR conversation comments as `issue_comment` events, so the example workflow guards that event with `github.event.issue.pull_request` to ignore normal issue comments.
 
 The executor does not post a start comment. If the agent reports `no findings`, the harness leaves the PR untouched and posts nothing. If the agent reports `applicable changes applied`, the harness commits and pushes the worktree changes back to the PR branch, then comments that the review changes were applied. If the executor fails, it posts a failure comment to the PR.
+
+With the code review workflow enabled too, that executor push fires the code review workflow again. If the fresh review finds another concrete fault, the review executor can apply that next change, push again, and keep the cycle going until the reviewer stops finding blocking faults.
 
 ## QA
 
@@ -284,6 +290,8 @@ I’ll expose this via ngrok for integrations with Linear and GitHub.
 I am using `/prompt` for small, well-described Linear problems that I think Opus can one-shot. You can use your own information hub, like Jira or some other BS.
 
 I am using `/mode/code-review` for every PR opened in the projects I choose, via GitHub Actions calling this API with the necessary info. (see /examples; it is the exact one I use)
+
+I enable `/mode/review-executor` beside it when I want the PR to self-repair: review comment -> executor fix -> push -> review again -> repeat until clean.
 
 I am still experimenting with `/mode/code-test`, since I am not sure it is worth its tokens for most use cases, so I am just calling it manually for some PRs.
 
