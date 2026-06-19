@@ -1,0 +1,31 @@
+name: Review Executor
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+
+
+jobs:
+  review-executor:
+    if: github.event.pull_request || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Request Review Executor
+        env:
+          PROJECT_LOCAL_PATH: ${{ vars.project_local_path }}
+          CLAUDE_HARNESS_API_URL: ${{ vars.claude_harness_api_url }}
+          CODING_HARNESS_API_TOKEN: ${{ secrets.coding_harness_api_token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.issue.pull_request && github.event.comment.id || '' }}
+          REVIEW_ID: ${{ github.event.review.id || github.event.comment.pull_request_review_id || '' }}
+        run: |
+          curl -X POST "${CLAUDE_HARNESS_API_URL}/mode/review-executor" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${CODING_HARNESS_API_TOKEN}" \
+            -d "{\"pr\": \"${PR_NUMBER}\", \"commentId\": \"${COMMENT_ID}\", \"reviewId\": \"${REVIEW_ID}\", \"project\": \"${PROJECT_LOCAL_PATH}\", \"provider\": \"codex\"}" \
+            --fail --silent --show-error

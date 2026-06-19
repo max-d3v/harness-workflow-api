@@ -23,8 +23,6 @@ import { resolveTesterSystemPrompt } from "../providers/index.ts";
 const githubEnv = process.env.GITHUB_TOKEN_USER;
 
 interface CodeTestInput {
-  // Repo path (worktree or local checkout). Required because PR diff/comment
-  // operations need a real git checkout.
   project: string;
   pr: string | number;
   url?: string;

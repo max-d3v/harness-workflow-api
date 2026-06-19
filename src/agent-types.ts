@@ -1,7 +1,7 @@
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 
 export type AgentCli = "claude" | "codex";
-export type AgentMode = "prompt" | "code_review" | "qa_tester";
+export type AgentMode = "prompt" | "code_review" | "qa_tester" | "review_executor";
 export type AgentAccess = "read-only" | "all-access";
 
 export interface AgentOptions {

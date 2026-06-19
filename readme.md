@@ -77,6 +77,14 @@ Given your prompt, project, and origin branch, it creates a worktree, chosen har
 
 Given a PR and project, the harness you choose performs a review with Cursor's internal team code review prompt (the best I have used by far) and adds it as a comment on the PR.
 
+## Review executor
+
+Given a PR, project, and either a top-level PR conversation `commentId` or a PR `reviewId`, the harness fetches the requested review/comment body, enters the PR head worktree, and asks the chosen agent to apply the requested review change when it is concrete and applicable.
+
+For `reviewId`, the harness includes the review body and any inline comments submitted with that review. GitHub emits top-level PR conversation comments as `issue_comment` events, so the example workflow guards that event with `github.event.issue.pull_request` to ignore normal issue comments.
+
+The executor does not post a start comment. If the agent reports `no findings`, the harness leaves the PR untouched and posts nothing. If the agent reports `applicable changes applied`, the harness commits and pushes the worktree changes back to the PR branch, then comments that the review changes were applied. If the executor fails, it posts a failure comment to the PR.
+
 ## QA
 
 Given a PR, a project, and one or more functional app URLs, the harness creates a temporary PR-head worktree for read-only context, passes the PR diff/stat to a tester agent, and tells the agent to exercise only the changed user-facing behavior through the provided URL(s).
@@ -200,17 +208,53 @@ response:
 }
 ```
 
+## POST /mode/review-executor
+
+request:
+```json
+{
+  "pr": 2,
+  "commentId": 1234567890,
+  "project": "code/nextjs-boilerplate",
+  "provider": "codex"
+}
+```
+
+or:
+```json
+{
+  "pr": 2,
+  "reviewId": 9876543210,
+  "project": "code/nextjs-boilerplate",
+  "provider": "codex"
+}
+```
+
+response when changes were applied:
+```json
+{
+  "result": "applicable changes applied",
+  "sessionId": "7207f92b-d5a3-4162-949c-90a25d26e737",
+  "prUrl": "https://github.com/max-d3v/orion-kit/pull/2",
+  "prNumber": 2,
+  "reviewDataId": 1234567890,
+  "reviewDataKind": "top_level_comment",
+  "reviewDataUrl": "https://github.com/max-d3v/orion-kit/pull/2#issuecomment-1234567890",
+  "pushed": true
+}
+```
+
 # Defaults and more details
 
 Claude Code is the default CLI. Pass `"cli": "codex"` (or `"provider": "codex"`) to use `codex exec` instead. Mode calls resolve `model` and `effort` from `provider_defaults` in `src/config.ts` unless the request overrides them.
 
-Code testing uses `qa` defaults for the tester agent. A code-test request must include `"url"` or `"urls"` with reachable HTTP(S) app URLs.
+Code testing uses `qa` defaults for the tester agent. Review execution uses `review_executor` defaults and requires either `"commentId"` or `"reviewId"`. A code-test request must include `"url"` or `"urls"` with reachable HTTP(S) app URLs.
 
 Provider runs print streamed model actions to the server terminal when `show_model_actions` is enabled in `src/config.ts`. Turn it off there to keep only request start, success, cancellation, and error logs.
 
 If a provider or mode has no configured defaults, requests must pass the missing values explicitly or the API will throw.
 
-Agent access is controlled with the optional `"access"` field: `"all-access"` enables editing tools, while `"read-only"` limits the agent to repository inspection. Prompt mode defaults to all-access; review and QA tester runs pass read-only access explicitly.
+Agent access is controlled with the optional `"access"` field: `"all-access"` enables editing tools, while `"read-only"` limits the agent to repository inspection. Prompt mode defaults to all-access; review and QA tester runs pass read-only access explicitly. Review executor runs use all-access because they are expected to edit code.
 
 You can persist sessions, but I’m against it. If you have a problem big enough that Opus with high reasoning can’t one-shot, just use your t3code locally and go at it.
 

@@ -1,4 +1,4 @@
-export type ModeDefaultsName = "code_review" | "prompt" | "qa";
+export type ModeDefaultsName = "code_review" | "prompt" | "qa" | "review_executor";
 export type Effort = "low" | "medium" | "high" | "max";
 
 // Controls verbose provider stream logs: reasoning, model text, tool calls, and step updates.
@@ -20,11 +20,15 @@ export const provider_defaults = {
     },
     prompt: {
       model: "gpt-5.5",
-      effort: "high",
+      effort: "max",
     },
     qa: {
       model: "gpt-5.4",
       effort: "medium",
+    },
+    review_executor: {
+      model: "gpt-5.5",
+      effort: "max",
     },
   },
   claude: {
@@ -39,6 +43,10 @@ export const provider_defaults = {
     qa: {
       model: "claude-opus-4-6",
       effort: "medium",
+    },
+    review_executor: {
+      model: "claude-opus-4-6",
+      effort: "max",
     },
   },
 } satisfies Record<string, Partial<Record<ModeDefaultsName, ModeDefaults>>>;

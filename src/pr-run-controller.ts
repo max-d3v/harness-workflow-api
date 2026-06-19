@@ -1,4 +1,4 @@
-export type PullRequestRunKind = "code-review" | "code-test";
+export type PullRequestRunKind = "code-review" | "code-test" | "review-executor";
 
 interface ActivePullRequestRun {
   controller: AbortController;
@@ -85,5 +85,7 @@ export function isSupersededPullRequestRun(signal: AbortSignal): boolean {
 }
 
 export function pullRequestRunKindLabel(kind: PullRequestRunKind): string {
-  return kind === "code-test" ? "automated QA" : "automated review";
+  if (kind === "code-test") return "automated QA";
+  if (kind === "review-executor") return "review executor";
+  return "automated review";
 }

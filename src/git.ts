@@ -113,6 +113,10 @@ export interface PRInfo {
   authorLogin: string | null;
   owner: string;
   repo: string;
+  headRepositoryOwnerLogin: string | null;
+  headRepositoryName: string | null;
+  isCrossRepository: boolean;
+  maintainerCanModify: boolean;
 }
 
 export interface PRHeadBranchCwd {
@@ -134,10 +138,25 @@ const GitHubPullRequestViewSchema = z.object({
     })
     .nullable()
     .optional(),
+  headRepositoryOwner: z
+    .object({
+      login: z.string().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
+  headRepository: z
+    .object({
+      name: z.string().nullable().optional(),
+      nameWithOwner: z.string().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
+  isCrossRepository: z.boolean().optional(),
+  maintainerCanModify: z.boolean().optional(),
 });
 
 export async function getPRInfo(project: string, pr: string | number): Promise<PRInfo> {
-  const json = await $`gh pr view ${pr} --json number,title,baseRefName,headRefName,url,author`.cwd(project).text();
+  const json = await $`gh pr view ${pr} --json number,title,baseRefName,headRefName,url,author,headRepositoryOwner,headRepository,isCrossRepository,maintainerCanModify`.cwd(project).text();
   const raw: unknown = JSON.parse(json);
   const data = GitHubPullRequestViewSchema.parse(raw);
   // gh returns the canonical PR URL: https://<host>/<owner>/<repo>/pull/<n>
@@ -145,6 +164,10 @@ export async function getPRInfo(project: string, pr: string | number): Promise<P
   if (!owner || !repo) {
     throw new Error(`Could not parse owner/repo from PR url: ${data.url}`);
   }
+  const headRepositoryName =
+    data.headRepository?.name
+    ?? data.headRepository?.nameWithOwner?.split("/").at(-1)
+    ?? repo;
   return {
     number: data.number,
     title: data.title,
@@ -154,6 +177,10 @@ export async function getPRInfo(project: string, pr: string | number): Promise<P
     authorLogin: data.author?.login ?? null,
     owner,
     repo,
+    headRepositoryOwnerLogin: data.headRepositoryOwner?.login ?? owner,
+    headRepositoryName,
+    isCrossRepository: data.isCrossRepository ?? false,
+    maintainerCanModify: data.maintainerCanModify ?? false,
   };
 }
 
@@ -324,6 +351,170 @@ export async function getPRDiff(project: string, pr: string | number): Promise<s
 export async function getPRDiffStat(project: string, pr: string | number): Promise<string> {
   const stat = await $`gh pr diff ${pr} --name-only`.cwd(project).text();
   return stat.trim();
+}
+
+export type PullRequestReviewDataKind = "review" | "top_level_comment";
+
+export interface PullRequestReviewThreadComment {
+  id: number;
+  body: string;
+  htmlUrl: string | null;
+  authorLogin: string | null;
+  path?: string;
+  line?: number;
+  diffHunk?: string;
+}
+
+export interface PullRequestReviewData {
+  id: number;
+  kind: PullRequestReviewDataKind;
+  body: string;
+  htmlUrl: string | null;
+  authorLogin: string | null;
+  reviewComments?: PullRequestReviewThreadComment[];
+}
+
+const GitHubCommentUserSchema = z
+  .object({
+    login: z.string().nullable().optional(),
+  })
+  .nullable()
+  .optional();
+
+const GitHubPullRequestReviewCommentSchema = z.object({
+  id: z.number(),
+  body: z.string().nullable().optional(),
+  html_url: z.string().nullable().optional(),
+  pull_request_url: z.string(),
+  user: GitHubCommentUserSchema,
+  path: z.string().nullable().optional(),
+  line: z.number().nullable().optional(),
+  diff_hunk: z.string().nullable().optional(),
+});
+
+const GitHubPullRequestReviewSchema = z.object({
+  id: z.number(),
+  body: z.string().nullable().optional(),
+  html_url: z.string().nullable().optional(),
+  pull_request_url: z.string(),
+  user: GitHubCommentUserSchema,
+});
+
+const GitHubIssueCommentSchema = z.object({
+  id: z.number(),
+  body: z.string().nullable().optional(),
+  html_url: z.string().nullable().optional(),
+  issue_url: z.string(),
+  user: GitHubCommentUserSchema,
+});
+
+async function getPullRequestReviewComments(
+  project: string,
+  pullRequest: PRInfo,
+  reviewId: string | number,
+): Promise<PullRequestReviewThreadComment[]> {
+  const endpoint = `repos/${pullRequest.owner}/${pullRequest.repo}/pulls/${pullRequest.number}/reviews/${reviewId}/comments`;
+  const json = await $`gh api ${endpoint} --paginate --slurp`.cwd(project).text();
+  const pages = z.array(z.array(GitHubPullRequestReviewCommentSchema)).parse(JSON.parse(json));
+  return pages.flat().map((comment) => ({
+    id: comment.id,
+    body: comment.body ?? "",
+    htmlUrl: comment.html_url ?? null,
+    authorLogin: comment.user?.login ?? null,
+    path: comment.path ?? undefined,
+    line: comment.line ?? undefined,
+    diffHunk: comment.diff_hunk ?? undefined,
+  }));
+}
+
+async function getPullRequestReviewDataByReviewId(
+  project: string,
+  pullRequest: PRInfo,
+  reviewId: string | number,
+): Promise<PullRequestReviewData> {
+  const endpoint = `repos/${pullRequest.owner}/${pullRequest.repo}/pulls/${pullRequest.number}/reviews/${reviewId}`;
+  const json = await $`gh api ${endpoint}`.cwd(project).text();
+  const data = GitHubPullRequestReviewSchema.parse(JSON.parse(json));
+  const reviewComments = await getPullRequestReviewComments(project, pullRequest, data.id);
+  return {
+    id: data.id,
+    kind: "review",
+    body: data.body ?? "",
+    htmlUrl: data.html_url ?? null,
+    authorLogin: data.user?.login ?? null,
+    reviewComments,
+  };
+}
+
+async function getPullRequestComment(
+  project: string,
+  pullRequest: PRInfo,
+  commentId: string | number,
+): Promise<PullRequestReviewData> {
+  const endpoint = `repos/${pullRequest.owner}/${pullRequest.repo}/issues/comments/${commentId}`;
+  const json = await $`gh api ${endpoint}`.cwd(project).text();
+  const data = GitHubIssueCommentSchema.parse(JSON.parse(json));
+  return {
+    id: data.id,
+    kind: "top_level_comment",
+    body: data.body ?? "",
+    htmlUrl: data.html_url ?? null,
+    authorLogin: data.user?.login ?? null,
+  };
+}
+
+export async function getPullRequestReviewData(
+  project: string,
+  pullRequest: PRInfo,
+  input: { commentId?: string | number; reviewId?: string | number },
+): Promise<PullRequestReviewData> {
+  if (input.commentId && input.reviewId) {
+    throw new Error("Pass either commentId or reviewId, not both.");
+  }
+  if (input.reviewId) {
+    return getPullRequestReviewDataByReviewId(project, pullRequest, input.reviewId);
+  }
+  if (input.commentId) {
+    return getPullRequestComment(project, pullRequest, input.commentId);
+  }
+  throw new Error("Missing required field: commentId or reviewId");
+}
+
+export async function getWorktreeStatus(cwd: string): Promise<string> {
+  const status = await $`git -C ${cwd} status --porcelain`.text();
+  return status.trim();
+}
+
+export async function fastForwardPullRequestHeadWorktree(
+  cwd: string,
+  pullRequest: PRInfo,
+): Promise<void> {
+  await $`git -C ${cwd} fetch origin refs/pull/${pullRequest.number}/head`.quiet();
+  await $`git -C ${cwd} merge --ff-only FETCH_HEAD`.quiet();
+}
+
+function resolvePullRequestHeadPushRemote(pullRequest: PRInfo): string {
+  if (!pullRequest.isCrossRepository) return "origin";
+  if (!pullRequest.headRepositoryOwnerLogin || !pullRequest.headRepositoryName) {
+    throw new Error(`Cannot resolve head repository for cross-repository PR #${pullRequest.number}.`);
+  }
+  return `https://github.com/${pullRequest.headRepositoryOwnerLogin}/${pullRequest.headRepositoryName}.git`;
+}
+
+export async function commitAndPushToPullRequestHead(input: {
+  cwd: string;
+  pullRequest: PRInfo;
+  message: string;
+}): Promise<boolean> {
+  const status = await getWorktreeStatus(input.cwd);
+  if (!status) return false;
+
+  await $`git -C ${input.cwd} add -A`.quiet();
+  await $`git -C ${input.cwd} commit -m ${input.message}`.quiet();
+
+  const remote = resolvePullRequestHeadPushRemote(input.pullRequest);
+  await $`git -C ${input.cwd} push ${remote} HEAD:${input.pullRequest.headBranch}`.quiet();
+  return true;
 }
 
 export type PullRequestReviewAction = "comment" | "request_changes";
