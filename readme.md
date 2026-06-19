@@ -11,7 +11,6 @@ The fun part: if you enable both automated code reviews and the review executor,
 - Bun and Node/npm available on the machine running the API. QA mode uses `npx` for Playwright MCP, GitHub MCP, and Gitshot.
 - A local git checkout for each project you pass in requests.
 - A logged-in GitHub CLI (`gh auth login`). The API uses `gh` to read PRs, post reviews/comments, create PRs, and push branches.
-- [Gitshot](https://github.com/vipulgupta2048/gitshot), via `npx`, for uploading QA screenshots to a dedicated image repo on the logged-in GitHub account so they can be embedded in PR comments.
 - A reachable running app URL for QA runs. The QA endpoint is URL-only: it does not build, boot, or deploy the app for the agent.
 
 # Setup
