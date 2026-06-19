@@ -12,6 +12,7 @@ import {
   beginPullRequestRun,
   isSupersededPullRequestRun,
 } from "../pr-run-controller.ts";
+import { withRunMetadata } from "../telemetry.ts";
 
 interface CodeReviewInput {
   project: string;
@@ -304,7 +305,10 @@ export async function codeReview(input: CodeReviewInput, controller: AbortContro
 
     if (!diff) {
       log("codeReview", `request succeeded: PR #${prInfo.number} has no changes; skipping`);
-      return { result: "No changes found in PR", prUrl: prInfo.url };
+      return withRunMetadata(
+        { result: "No changes found in PR", prUrl: prInfo.url },
+        { githubUser: prInfo.authorLogin, githubUserSource: "pr_author" },
+      );
     }
 
     const focus = input.focus ? `\nFocus area: ${input.focus}` : "";
@@ -372,17 +376,20 @@ ${diff}
       "codeReview",
       `request succeeded: reviewed PR #${prInfo.number} decision=${parsedReview.decision} action=${reviewAction}`,
     );
-    return {
-      result: parsedReview.body,
-      reviewDecision: reviewAction === "request_changes" ? "request_changes" : "comment_only",
-      sessionId,
-      prUrl: prInfo.url,
-      prNumber: prInfo.number,
-      model,
-      totalTokens,
-      usage,
-      totalCostUsd,
-    };
+    return withRunMetadata(
+      {
+        result: parsedReview.body,
+        reviewDecision: reviewAction === "request_changes" ? "request_changes" : "comment_only",
+        sessionId,
+        prUrl: prInfo.url,
+        prNumber: prInfo.number,
+        model,
+        totalTokens,
+        usage,
+        totalCostUsd,
+      },
+      { githubUser: prInfo.authorLogin, githubUserSource: "pr_author" },
+    );
   } catch (err) {
     if (isSupersededPullRequestRun(run.signal)) {
       log("codeReview", `request stopped: PR ${input.pr} review superseded by a newer request`);

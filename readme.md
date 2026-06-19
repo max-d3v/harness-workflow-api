@@ -50,6 +50,28 @@ Start the API:
 bun run start
 ```
 
+# CLI dashboard
+
+Every `/prompt` and `/mode/:name` request appends a JSONL telemetry record to `logs/runs.jsonl` by default. The file is local and gitignored.
+
+Run the Ink-powered live dashboard:
+
+```bash
+bun run dashboard
+```
+
+Useful options:
+
+```bash
+bun run dashboard --since 6h
+bun run dashboard --all
+bun run dashboard --interval 2
+bun run dashboard --file /path/to/runs.jsonl
+bun run dashboard --once
+```
+
+The dashboard shows total runs, success/failure/stopped/cancelled counts, token totals, reported-or-estimated cost, median duration, total duration, per-mode totals, per-provider/model totals, per-GitHub-user totals, and recent failures. For GitHub users, code review and QA runs are attributed to the PR author; review executor runs are attributed to the author of the triggering top-level comment or review. Set `HARNESS_TELEMETRY_FILE` to write/read a different default telemetry file.
+
 # Auth
 
 Protected endpoints require bearer-token auth:

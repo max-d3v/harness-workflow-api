@@ -19,6 +19,7 @@ import {
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import { imageServer } from "../tools/screenshot-upload.ts";
 import { resolveTesterSystemPrompt } from "../providers/index.ts";
+import { withRunMetadata } from "../telemetry.ts";
 
 const githubEnv = process.env.GITHUB_TOKEN_USER;
 
@@ -127,7 +128,10 @@ export async function codeTest(input: CodeTestInput, controller: AbortController
 
     if (!diff) {
       log("codeTest", `request succeeded: PR #${prInfo.number} has no changes; skipping`);
-      return { result: "No changes found in PR", prUrl: prInfo.url };
+      return withRunMetadata(
+        { result: "No changes found in PR", prUrl: prInfo.url },
+        { githubUser: prInfo.authorLogin, githubUserSource: "pr_author" },
+      );
     }
 
     const extraInstructions = input.extraInstructions?.trim();
@@ -190,7 +194,10 @@ ${diff}
     );
 
     log("codeTest", `request succeeded: tested PR #${prInfo.number}`);
-    return { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, model, totalTokens, usage, totalCostUsd };
+    return withRunMetadata(
+      { result, sessionId, prUrl: prInfo.url, prNumber: prInfo.number, model, totalTokens, usage, totalCostUsd },
+      { githubUser: prInfo.authorLogin, githubUserSource: "pr_author" },
+    );
   } catch (err) {
     if (isSupersededPullRequestRun(run.signal)) {
       log("codeTest", `request stopped: PR ${input.pr} QA superseded by a newer request`);

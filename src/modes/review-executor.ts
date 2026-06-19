@@ -23,6 +23,7 @@ import {
   beginPullRequestRun,
   isSupersededPullRequestRun,
 } from "../pr-run-controller.ts";
+import { withRunMetadata, type GitHubUserSource } from "../telemetry.ts";
 
 interface ReviewExecutorInput {
   project: string;
@@ -216,6 +217,10 @@ ${clipForComment(message)}
 \`\`\``;
 }
 
+function reviewDataUserSource(reviewData: PullRequestReviewData): GitHubUserSource {
+  return reviewData.kind === "review" ? "review_author" : "comment_author";
+}
+
 export async function reviewExecutor(input: ReviewExecutorInput, controller: AbortController) {
   if (!input.project) throw new Error("Missing required field: project");
   if (!input.pr) throw new Error("Missing required field: pr");
@@ -259,14 +264,17 @@ export async function reviewExecutor(input: ReviewExecutorInput, controller: Abo
         "reviewExecutor",
         `request succeeded: PR #${prInfo.number} ${reviewDataSelectorLabel(reviewDataSelector)} has no body; skipping`,
       );
-      return {
-        result: "no findings",
-        prUrl: prInfo.url,
-        prNumber: prInfo.number,
-        reviewDataId: reviewData.id,
-        reviewDataKind: reviewData.kind,
-        reviewDataUrl: reviewData.htmlUrl,
-      };
+      return withRunMetadata(
+        {
+          result: "no findings",
+          prUrl: prInfo.url,
+          prNumber: prInfo.number,
+          reviewDataId: reviewData.id,
+          reviewDataKind: reviewData.kind,
+          reviewDataUrl: reviewData.htmlUrl,
+        },
+        { githubUser: reviewData.authorLogin, githubUserSource: reviewDataUserSource(reviewData) },
+      );
     }
 
     const prHeadBranchContext = await getOrCreatePRHeadBranchCwd({
@@ -328,19 +336,22 @@ export async function reviewExecutor(input: ReviewExecutorInput, controller: Abo
         "reviewExecutor",
         `request succeeded: no findings for PR #${prInfo.number} ${reviewDataSelectorLabel(reviewDataSelector)}`,
       );
-      return {
-        result: "no findings",
-        sessionId: agentRun.sessionId,
-        prUrl: prInfo.url,
-        prNumber: prInfo.number,
-        reviewDataId: reviewData.id,
-        reviewDataKind: reviewData.kind,
-        reviewDataUrl: reviewData.htmlUrl,
-        model: agentRun.model,
-        totalTokens: agentRun.totalTokens,
-        usage: agentRun.usage,
-        totalCostUsd: agentRun.totalCostUsd,
-      };
+      return withRunMetadata(
+        {
+          result: "no findings",
+          sessionId: agentRun.sessionId,
+          prUrl: prInfo.url,
+          prNumber: prInfo.number,
+          reviewDataId: reviewData.id,
+          reviewDataKind: reviewData.kind,
+          reviewDataUrl: reviewData.htmlUrl,
+          model: agentRun.model,
+          totalTokens: agentRun.totalTokens,
+          usage: agentRun.usage,
+          totalCostUsd: agentRun.totalCostUsd,
+        },
+        { githubUser: reviewData.authorLogin, githubUserSource: reviewDataUserSource(reviewData) },
+      );
     }
 
     if (!finalStatus) {
@@ -366,20 +377,23 @@ export async function reviewExecutor(input: ReviewExecutorInput, controller: Abo
       "reviewExecutor",
       `request succeeded: applied PR #${prInfo.number} ${reviewDataSelectorLabel(reviewDataSelector)}`,
     );
-    return {
-      result: "applicable changes applied",
-      sessionId: agentRun.sessionId,
-      prUrl: prInfo.url,
-      prNumber: prInfo.number,
-      reviewDataId: reviewData.id,
-      reviewDataKind: reviewData.kind,
-      reviewDataUrl: reviewData.htmlUrl,
-      pushed: true,
-      model: agentRun.model,
-      totalTokens: agentRun.totalTokens,
-      usage: agentRun.usage,
-      totalCostUsd: agentRun.totalCostUsd,
-    };
+    return withRunMetadata(
+      {
+        result: "applicable changes applied",
+        sessionId: agentRun.sessionId,
+        prUrl: prInfo.url,
+        prNumber: prInfo.number,
+        reviewDataId: reviewData.id,
+        reviewDataKind: reviewData.kind,
+        reviewDataUrl: reviewData.htmlUrl,
+        pushed: true,
+        model: agentRun.model,
+        totalTokens: agentRun.totalTokens,
+        usage: agentRun.usage,
+        totalCostUsd: agentRun.totalCostUsd,
+      },
+      { githubUser: reviewData.authorLogin, githubUserSource: reviewDataUserSource(reviewData) },
+    );
   } catch (err) {
     if (isSupersededPullRequestRun(run.signal)) {
       log("reviewExecutor", `request stopped: PR ${input.pr} executor superseded by a newer request`);

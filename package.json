@@ -5,11 +5,15 @@
   "private": true,
   "scripts": {
     "dev": "bun --watch src/index.ts",
-    "start": "bun src/index.ts"
+    "start": "bun src/index.ts",
+    "dashboard": "bun src/dashboard.tsx",
+    "test": "bun test"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/express": "^5.0.6"
+    "@types/express": "^5.0.6",
+    "@types/react": "^19.2.17",
+    "ink-testing-library": "^4.0.0"
   },
   "peerDependencies": {
     "typescript": "^5"
@@ -19,6 +23,8 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex-sdk": "0.137.0",
     "express": "^5.2.1",
+    "ink": "^7.1.0",
+    "react": "^19.2.7",
     "zod": "^4.3.6"
   }
 }

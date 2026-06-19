@@ -5,6 +5,7 @@ import { openPR, queryAgentInNewWorktree, type AgentOptions } from "./agent.ts";
 import { resolveProviderDefaults } from "./config.ts";
 import { MODES } from "./modes/index.ts";
 import { log } from "./logging.ts";
+import { startRunTelemetry } from "./telemetry.ts";
 
 const app = express();
 app.use(express.json());
@@ -25,16 +26,35 @@ app.use(requireTokenAuth);
 
 app.post("/prompt", async (req: Request, res: Response) => {
   const body = req.body as AgentOptions;
+  const requestedProvider = body.cli ?? body.provider ?? "claude";
+  const telemetry = startRunTelemetry({
+    mode: "prompt",
+    provider: requestedProvider,
+    project: typeof body.project === "string" ? body.project : undefined,
+  });
   const originBranch = body.originBranch;
   if (!body.prompt || typeof body.prompt !== "string") {
+    await telemetry.finish({
+      status: "failed",
+      error: new Error("Missing required field: prompt"),
+    });
     res.status(400).json({ error: "Missing required field: prompt" });
     return;
   }
   if (!body.project || typeof body.project !== "string") {
+    await telemetry.finish({
+      status: "failed",
+      error: new Error("Missing required field: project"),
+    });
     res.status(400).json({ error: "Missing required field: project" });
     return;
   }
   if (!originBranch || typeof originBranch !== "string") {
+    await telemetry.finish({
+      status: "failed",
+      error: new Error("Missing required field: originBranch"),
+      project: body.project,
+    });
     res.status(400).json({ error: "Missing required field: originBranch" });
     return;
   }
@@ -42,7 +62,7 @@ app.post("/prompt", async (req: Request, res: Response) => {
   const ac = new AbortController();
   log(
     "POST /prompt",
-    `request started: provider=${body.cli ?? body.provider ?? "claude"} project=${body.project} originBranch=${originBranch}`,
+    `request started: provider=${requestedProvider} project=${body.project} originBranch=${originBranch}`,
   );
 
   let cleanupWorktree: () => Promise<void> = async () => {};
@@ -75,14 +95,31 @@ app.post("/prompt", async (req: Request, res: Response) => {
       "POST /prompt",
       `request succeeded: branch=${result.branch ?? "(none)"} prUrl=${prUrl ?? "(skipped)"}`,
     );
+    await telemetry.finish({
+      status: "success",
+      result,
+      provider: defaults.provider,
+      model: result.model,
+      project: body.project,
+    });
     res.json({ ...result, prUrl });
   } catch (err: any) {
     if (ac.signal.aborted) {
       log("POST /prompt", "request cancelled");
+      await telemetry.finish({
+        status: "cancelled",
+        error: err,
+        project: body.project,
+      });
       if (!res.headersSent) res.status(499).json({ error: "Request cancelled" });
       return;
     }
     log("POST /prompt", "request failed:", err);
+    await telemetry.finish({
+      status: "failed",
+      error: err,
+      project: body.project,
+    });
     res.status(500).json({ error: err.message ?? "Internal server error" });
   } finally {
     await cleanupWorktree().catch((cleanupErr) =>
@@ -92,9 +129,21 @@ app.post("/prompt", async (req: Request, res: Response) => {
 });
 
 app.post("/mode/:name", async (req: Request, res: Response) => {
-  const modeName = req.params.name;
+  const rawModeName = req.params.name;
+  const modeName = Array.isArray(rawModeName) ? (rawModeName[0] ?? "") : (rawModeName ?? "");
+  const body = req.body as Partial<AgentOptions> & { pr?: string | number };
+  const telemetry = startRunTelemetry({
+    mode: modeName,
+    provider: body.cli ?? body.provider ?? "claude",
+    project: typeof body.project === "string" ? body.project : undefined,
+    pr: typeof body.pr === "string" || typeof body.pr === "number" ? body.pr : undefined,
+  });
   const fn = MODES[modeName as keyof typeof MODES];
   if (!fn) {
+    await telemetry.finish({
+      status: "failed",
+      error: new Error(`Unknown function: ${modeName}`),
+    });
     res.status(404).json({ error: `Unknown function: ${modeName}` });
     return;
   }
@@ -105,14 +154,32 @@ app.post("/mode/:name", async (req: Request, res: Response) => {
   try {
     const result = await fn(req.body, ac);
     log(`POST /mode/${modeName}`, "request succeeded");
+    await telemetry.finish({
+      status: "success",
+      result,
+      project: typeof body.project === "string" ? body.project : undefined,
+      pr: typeof body.pr === "string" || typeof body.pr === "number" ? body.pr : undefined,
+    });
     res.json(result);
   } catch (err: any) {
     if (ac.signal.aborted) {
       log(`POST /mode/${modeName}`, "request cancelled");
+      await telemetry.finish({
+        status: "cancelled",
+        error: err,
+        project: typeof body.project === "string" ? body.project : undefined,
+        pr: typeof body.pr === "string" || typeof body.pr === "number" ? body.pr : undefined,
+      });
       if (!res.headersSent) res.status(499).json({ error: "Request cancelled" });
       return;
     }
     log(`POST /mode/${modeName}`, "request failed:", err);
+    await telemetry.finish({
+      status: "failed",
+      error: err,
+      project: typeof body.project === "string" ? body.project : undefined,
+      pr: typeof body.pr === "string" || typeof body.pr === "number" ? body.pr : undefined,
+    });
     res.status(isClientInputError(err) ? 400 : 500).json({ error: err.message ?? "Internal server error" });
   }
 });
