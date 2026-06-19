@@ -3,17 +3,13 @@ name: Review Executor
 on:
   pull_request_review:
     types: [submitted]
-  pull_request_review_comment:
-    types: [created]
   issue_comment:
     types: [created]
 
 
 jobs:
   review-executor:
-    if: github.event.pull_request || github.event.issue.pull_request
     runs-on: ubuntu-latest
-
     steps:
       - name: Request Review Executor
         env:
