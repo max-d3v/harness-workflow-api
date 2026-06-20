@@ -194,7 +194,7 @@ ${fencedBlock("diff", input.diff || "(empty)")}
 
 Review the triggering review/comment payload, apply any applicable requested change in this worktree, then finish with exactly one allowed final response.`;
 }
-
+  
 function buildAppliedComment(reviewData: PullRequestReviewData, pullRequest: PRInfo): string {
   const source = reviewData.htmlUrl ? `\n\nAddressed review item: ${reviewData.htmlUrl}` : "";
   return `✅ **Review changes applied.**

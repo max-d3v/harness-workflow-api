@@ -1,10 +1,10 @@
-# Coding Harness API 🦹
+# Harness Workflow API
 
 Get a better and customizable code rabbit for free!
 
-Use your Claude or Codex subscription plan through an HTTP wrapper to run autonomous coding agents and automations (code reviews, QA agents) for one-fifth of the price.
+Use your Claude or Codex subscription plan through an HTTP wrapper to run autonomous coding agents, self feedback loops and automations for one-fifth of the price.
 
-The fun part: if you enable both automated code reviews and the review executor, they form a repair loop. The reviewer flags blocking faults, the executor applies concrete fixes and pushes them to the PR branch, and that push triggers another review. The loop repeats until the reviewer has no more blocking faults to request changes on.
+Make your workflow automatic and dramatically improve llm code quality.
 
 # Prerequisites
 
